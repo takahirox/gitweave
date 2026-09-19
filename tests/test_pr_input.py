@@ -70,8 +70,12 @@ class InputActionTests(unittest.TestCase):
         self.assertEqual(self.action.remote_sha, FIX)
         self.assertEqual(self.action.input_pr["head_sha"], HEAD)
         # A review/action checkpoint may have another SHA but the identical tree.
-        self.action.run("merge", self.merge, {"workspace_base": "d" * 40})
-        self.assertIn("sha=" + FIX, self.mutations[-1])
+        result = self.action.run("merge", self.merge, {"workspace_base": "d" * 40})
+        self.assertEqual(result.data, {"merged": True, "url": self.raw["html_url"],
+                                       "merge_commit": "merged"})
+        self.assertEqual(self.mutations, [
+            ("api", "--method", "PUT", "repos/owner/repo/pulls/10/merge",
+             "-f", "sha=" + FIX, "-f", "merge_method=merge")])
 
     def test_sync_success_then_timeout_retry(self):
         original = self.command
@@ -149,14 +153,25 @@ class InputActionTests(unittest.TestCase):
         self.assertEqual(self.action.remote_sha, HEAD)
 
     def test_merge_policy_rejection_and_exact_sha(self):
-        for response in (json.dumps({"merged": False, "message": "Required checks pending"}),
-                         Failure("github", "HTTP 405: Required reviews missing", retryable=True)):
-            self.action.gh = Mock(side_effect=[json.dumps(self.raw), json.dumps({"id": 1, "permissions": {"push": True}}), response])
-            with self.assertRaisesRegex(Failure, "Required"):
-                self.action.run("merge", self.merge, self.context)
-            self.assertIn("sha=" + HEAD, self.action.gh.call_args.args)
-            self.assertNotIn("--admin", self.action.gh.call_args.args)
-            self.assertNotIn("--auto", self.action.gh.call_args.args)
+        for response, diagnostic, kind, retryable in (
+                (json.dumps({"merged": False, "message": "Required checks pending"}),
+                 "Required checks pending", "merge_policy", False),
+                (Failure("github", "HTTP 405: Required reviews missing", retryable=True),
+                 "Required reviews missing", "github", True),
+                (json.dumps({"merged": False, "message": "Merge commits are not allowed"}),
+                 "Merge commits are not allowed", "merge_policy", False),
+                (Failure("github", "HTTP 405: Merge commits are not allowed", retryable=True),
+                 "HTTP 405: Merge commits are not allowed", "github", True)):
+            with self.subTest(diagnostic=diagnostic):
+                self.action.gh = Mock(side_effect=[json.dumps(self.raw), json.dumps({"id": 1, "permissions": {"push": True}}), response])
+                with self.assertRaisesRegex(Failure, diagnostic) as raised:
+                    self.action.run("merge", self.merge, self.context)
+                self.assertEqual(raised.exception.kind, kind)
+                self.assertEqual(raised.exception.retryable, retryable)
+                self.assertEqual(self.action.gh.call_count, 3)
+                self.assertEqual(self.action.gh.call_args.args,
+                                 ("api", "--method", "PUT", "repos/owner/repo/pulls/10/merge",
+                                  "-f", "sha=" + HEAD, "-f", "merge_method=merge"))
 
     def test_merge_success_then_timeout_retry(self):
         original = self.gh
