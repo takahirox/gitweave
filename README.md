@@ -127,3 +127,8 @@ gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10 "R
 ```
 
 See the [runtime guide](docs/runtime.md) for graph syntax, parallel execution, fan-out, review/fix loops, Git records, explicit PR actions, and validation. [The parallel example](examples/parallel.json) combines both providers in one graph.
+
+Final Runs automatically archive their GitWeave refs and notes to the artifact
+repository or configured origin. Offline Runs can be exported later with
+`gitweave export`; `gitweave fetch` recovers a selected Run into a fresh repository.
+See [destination selection, atomic publication, and recovery](docs/runtime.md#durable-provenance-and-recovery).

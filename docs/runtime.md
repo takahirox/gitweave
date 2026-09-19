@@ -69,7 +69,7 @@ git notes --ref=refs/notes/gitweave/RUN_ID show OUTPUT_COMMIT
 git diff BASE_COMMIT OUTPUT_COMMIT
 ```
 
-Raw logs can contain repository or prompt content; keep these local records under the same access controls as the repository. Publishing an artifact does not automatically publish the Run refs or notes. There is no resume-after-process-crash command in v0; retained refs/notes support diagnosis. A hard process/host crash may leave the Run marked running and a worktree on disk. Git storage exhaustion can prevent record writes; those failures are surfaced rather than reported as completed execution.
+Raw logs can contain repository or prompt content; keep provenance under the same access controls as the repository. Runtime finalization publishes Run refs and notes when a provenance destination is resolved; see durable provenance and recovery below. There is no resume-after-process-crash command in v0; retained refs/notes support diagnosis. A hard process/host crash may leave the Run marked running and a worktree on disk. Git storage exhaustion can prevent record writes; those failures are surfaced rather than reported as completed execution.
 
 ## Explicit GitHub actions
 
@@ -182,3 +182,79 @@ Deterministic tests use temporary Git repositories, injected adapters/actions, n
 The opt-in smoke creates a disposable repository, invokes both installed CLIs with their normal authentication, validates structured results, and checks that both file artifacts reach the terminal commit. It publishes nothing and prints the repository and Run ID for inspection. Use `--provider codex` or `--provider claude` to diagnose an individual adapter. Authenticate using the respective CLI before running; do not change providers, redeem reset tickets or buy allowance when a limit is encountered.
 
 CLI interfaces were checked against [Codex non-interactive documentation](https://developers.openai.com/codex/noninteractive), [Claude programmatic execution documentation](https://code.claude.com/docs/en/headless), and installed CLI help. Smoke validation complements deterministic coverage; it does not prove general task correctness.
+
+## Durable provenance and recovery
+
+Runtime finalization archives the final Run record after all attempts and System
+Actions (including merge) have been recorded. This is runtime-owned Git transfer,
+not an agent action or an early `publish_pr` snapshot. The archive contains exactly
+`refs/gitweave/RUN_ID/*` (Run, all successful/failed attempts, PR inputs and an
+`archive` manifest) and `refs/notes/gitweave/RUN_ID`. Artifact branches are unchanged;
+merging or deleting them does not delete provenance. Retained logs are included.
+
+Destination selection is deterministic:
+
+1. Existing-PR Runs use the PR's base repository; graphs with `publish_pr` use its
+   publication repository. A single distinct repository takes precedence over
+   local `origin`. Comment targets do not select an artifact repository.
+2. Multiple artifact repositories require `run --provenance-remote` to select one.
+   An override must match one of those repositories using its canonical
+   `https://github.com/OWNER/REPO.git` URL (or a named remote resolving to that URL).
+   For fork PR inputs this means the base repository; inability to write there is
+   a visible persistence failure, not an implicit fallback to the fork.
+3. For local Runs without a PR/publication repository, use the configured `origin`
+   push URL. `--provenance-remote REMOTE_OR_URL` explicitly selects another artifact
+   destination. A named remote must resolve to exactly one push URL.
+4. With no destination, execution remains local/offline and the final record has
+   `provenance_destination: null`. No durability is claimed. Export can be performed
+   later, including for final Runs created by older runtimes.
+
+GitHub transfers use the runtime's `gh auth git-credential` helper; other targets
+use native Git/SSH credentials. URLs containing user information, query strings
+or fragments are rejected. Credential values are never stored in the destination
+field. Transfer diagnostics report a bounded error category rather than raw Git
+stderr, which may contain credentials. Existing attempt logs are preserved.
+
+```sh
+# Explicit destination for a local Run
+gitweave run --graph examples/single.json --repo /path/to/repo --commit HEAD \
+   --provenance-remote origin "Implement the request"
+
+# Archive an already final local Run (also works for older runtime records)
+gitweave export --repo /path/to/repo --run RUN_ID --remote origin
+
+# After the original local repository has been deleted
+git clone REPOSITORY_URL recovered
+gitweave fetch --repo recovered --run RUN_ID --remote origin
+git -C recovered show refs/gitweave/RUN_ID/run:run.json
+git -C recovered notes --ref=refs/notes/gitweave/RUN_ID show ATTEMPT_COMMIT
+```
+
+`export` without `--remote` uses the recorded destination, then the selection rules
+above. `fetch` requires an explicit remote; it can also recover into an empty
+`git init` repository. Ordinary clone does not fetch these namespaces. Discover
+archived Run IDs with `git ls-remote REPOSITORY_URL 'refs/gitweave/*/archive'`.
+The corresponding raw refspecs are
+`refs/gitweave/RUN_ID/*:refs/gitweave/RUN_ID/*` and
+`refs/notes/gitweave/RUN_ID:refs/notes/gitweave/RUN_ID`; prefer `gitweave fetch`,
+which validates completeness and installs refs in a local transaction.
+
+Archives are immutable snapshots. Export requires either an empty remote Run
+namespace or an exact match of all refs and their object IDs. Creation uses one
+atomic push with explicit per-ref empty-value leases and no tags; atomic-push
+support is required. There is no non-atomic fallback, automatic retry, overwrite,
+repository-setting change, or branch-protection bypass. Partial archives and
+collisions fail visibly. Repeated export/fetch of the same snapshot is safe.
+Fetch verifies the manifest and recorded attempts/notes and PR inputs before
+installing refs; conflicting local refs are preserved. Matching subsets can be
+completed locally. Neither command changes other Runs or artifact branches.
+
+A transfer failure raises a `persistence` error (CLI exit 2), even when execution
+completed. Local evidence remains available for inspection and a later explicit
+export. The local final Run's `status` describes execution, not transfer success;
+it is not rewritten after upload, avoiding recursive self-recording. A successful
+export response is the durability acknowledgement. A timeout after a successful
+push can be reconciled by repeating export. A hard crash before finalization may
+leave a running Run, which cannot be archived with this entry point. Final failed
+Runs are archived too when a destination is resolved. Durability does not imply
+task approval.

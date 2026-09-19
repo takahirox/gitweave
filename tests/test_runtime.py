@@ -253,7 +253,9 @@ class RuntimeTests(unittest.TestCase):
             return Result(message="done")
         run = self.runtime({"pub": publish, "a": node()}, ["pub", "a"], work, retries=1)
         run.actions = Actions()
-        record = run.run()
+        with patch("gitweave.runtime.Archive") as archive:
+            record = run.run()
+            archive.return_value.export.assert_called_once_with()
         self.assertEqual(record["status"], "completed")
         self.assertEqual(len(record["attempts"]), 3)
 

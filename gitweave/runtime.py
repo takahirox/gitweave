@@ -13,6 +13,7 @@ import uuid
 from .actions import GitHubActions
 from .adapters import CLIAdapter
 from .git import Git
+from .persistence import Archive, destination
 from .graph import validate_graph
 from .model import Failure, Result, equal, pointer, validate
 
@@ -22,7 +23,7 @@ def now():
 
 
 class Runtime:
-    def __init__(self, graph_text, repo, commit, request, *, adapters=None, actions=None, pr=None):
+    def __init__(self, graph_text, repo, commit, request, *, adapters=None, actions=None, pr=None, provenance_remote=None):
         self.graph = validate_graph(json.loads(graph_text))
         self.id = uuid.uuid4().hex
         if pr is not None:
@@ -53,6 +54,7 @@ class Runtime:
                        "request": request, "graph": graph_text,
                        "graph_digest": hashlib.sha256(graph_text.encode()).hexdigest(),
                        "started_at": now(), "status": "running", "attempts": [], "outputs": []}
+        self.record["provenance_destination"] = destination(self.git, self.record, provenance_remote)
         self.steps = 0
         self.instances = 0
         self.stopped = False
@@ -221,6 +223,8 @@ class Runtime:
             self.record.update(ended_at=now(), steps=self.steps, errors=self.errors,
                                notes_ref=self.git.notes, run_ref=f"refs/gitweave/{self.id}/run")
             self.git.run_record(self.record)
+        if self.record["provenance_destination"] is not None:
+            Archive(self.git).export()
         return self.record
 
     def run(self):
