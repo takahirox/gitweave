@@ -29,10 +29,14 @@ class GitHubActions:
             publisher = node_id if node["action"] == "publish_pr" else cfg["publish_node"]
             branch = f"gitweave/{self.run_id}/{publisher}"
             if node["action"] == "publish_pr":
+                prs = json.loads(self.gh("pr", "list", "--repo", repo, "--head", branch,
+                                         "--state", "all", "--json", "number,state,url,baseRefName"))
+                if prs and (prs[0]["state"] != "OPEN" or prs[0]["baseRefName"] != cfg["base"]):
+                    raise Failure("publication_conflict", "Managed PR is closed or has a different base")
                 commit = context["workspace_base"]
                 remote = f"https://github.com/{repo}.git"
                 remote_ref = f"refs/heads/{branch}"
-                current = self.git.command("ls-remote", remote, remote_ref).split()
+                current = self.git.command("-c", "credential.helper=!gh auth git-credential", "ls-remote", remote, remote_ref).split()
                 current = current[0] if current else ""
                 expected = self.published.get(publisher, "")
                 if current != commit:
@@ -41,12 +45,8 @@ class GitHubActions:
                     self.git.command("-c", "credential.helper=!gh auth git-credential", "push",
                                      f"--force-with-lease={remote_ref}:{expected}", remote, f"{commit}:{remote_ref}")
                 self.published[publisher] = commit
-                prs = json.loads(self.gh("pr", "list", "--repo", repo, "--head", branch,
-                                         "--state", "all", "--json", "number,state,url,baseRefName"))
                 if prs:
                     pr = prs[0]
-                    if pr["state"] != "OPEN" or pr["baseRefName"] != cfg["base"]:
-                        raise Failure("publication_conflict", "Managed PR is closed or has a different base")
                     self.gh("pr", "edit", str(pr["number"]), "--repo", repo,
                             "--title", cfg["title"], "--body", cfg.get("body", ""))
                     url = pr["url"]

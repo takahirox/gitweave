@@ -36,10 +36,11 @@ class ActionTests(unittest.TestCase):
 
     def test_external_branch_update_is_not_overwritten(self):
         self.git.command.return_value = "external\tref"
+        self.actions.gh.return_value = "[]"
         with self.assertRaises(Failure) as raised:
             self.actions.run("pub", self.pub, self.context)
         self.assertEqual(raised.exception.kind, "publication_conflict")
-        self.actions.gh.assert_not_called()
+        self.assertEqual(self.git.command.call_count, 1)
 
     def test_merge_requires_approval_and_exact_head(self):
         self.actions.published["pub"] = "a" * 40
@@ -61,4 +62,17 @@ class ActionTests(unittest.TestCase):
         self.actions.published["pub"] = "a" * 40
         self.actions.gh.return_value = json.dumps(dict(number=1, state="MERGED", headRefOid="a" * 40, url="url", mergeCommit={"oid": "merged"}))
         self.assertTrue(self.actions.run("merge", self.merge, self.context).data["merged"])
+        self.assertEqual(self.actions.gh.call_count, 1)
+
+    def test_closed_pr_is_rejected_before_pushing(self):
+        self.actions.gh.return_value = json.dumps([{"state": "CLOSED", "baseRefName": "main"}])
+        with self.assertRaises(Failure):
+            self.actions.run("pub", self.pub, self.context)
+        self.git.command.assert_not_called()
+
+    def test_changed_pr_head_is_not_merged(self):
+        self.actions.published["pub"] = "expected"
+        self.actions.gh.return_value = json.dumps({"headRefOid": "external"})
+        with self.assertRaises(Failure):
+            self.actions.run("merge", self.merge, self.context)
         self.assertEqual(self.actions.gh.call_count, 1)

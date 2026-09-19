@@ -1,6 +1,8 @@
 """Portable result contracts and a deliberately small JSON Schema dialect."""
 from dataclasses import asdict, dataclass, field
 from typing import Any
+import math
+import re
 
 
 class Failure(Exception):
@@ -31,7 +33,11 @@ def pointer(value, path):
         raise Failure("graph", f"Invalid JSON pointer: {path!r}")
     try:
         for part in path.split("/")[1:]:
+            if re.search(r"~(?![01])", part):
+                raise ValueError("Invalid JSON pointer escape")
             key = part.replace("~1", "/").replace("~0", "~")
+            if isinstance(value, list) and not re.fullmatch(r"0|[1-9][0-9]*", key):
+                raise ValueError("Invalid array index")
             value = value[int(key)] if isinstance(value, list) else value[key]
         return value
     except (KeyError, IndexError, TypeError, ValueError) as exc:
@@ -42,12 +48,25 @@ TYPES = {"object": dict, "array": list, "string": str, "integer": int,
          "number": (int, float), "boolean": bool, "null": type(None)}
 
 
+def equal(left, right):
+    """JSON equality with strict types, including nested booleans vs numbers."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(equal(left[k], right[k]) for k in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(equal(a, b) for a, b in zip(left, right))
+    return left == right
+
+
 def check_schema(schema):
     if not isinstance(schema, dict):
         raise Failure("graph", "A result schema must be an object")
     allowed = {"type", "properties", "required", "additionalProperties", "items", "enum", "description"}
-    if set(schema) - allowed or schema.get("type") not in TYPES:
+    if set(schema) - allowed or not isinstance(schema.get("type"), str) or schema["type"] not in TYPES:
         raise Failure("graph", "Unsupported result schema keyword or type")
+    if "description" in schema and not isinstance(schema["description"], str):
+        raise Failure("graph", "Schema description must be text")
     if "additionalProperties" in schema and type(schema["additionalProperties"]) is not bool:
         raise Failure("graph", "additionalProperties must be a boolean")
     props = schema.get("properties", {})
@@ -66,7 +85,9 @@ def validate(value, schema, path="data"):
     kind = schema["type"]
     if not isinstance(value, TYPES[kind]) or (kind in ("integer", "number") and isinstance(value, bool)):
         raise Failure("result", f"{path} must be {kind}")
-    if "enum" in schema and not any(type(value) is type(v) and value == v for v in schema["enum"]):
+    if isinstance(value, float) and not math.isfinite(value):
+        raise Failure("result", f"{path} must be finite")
+    if "enum" in schema and not any(equal(value, v) for v in schema["enum"]):
         raise Failure("result", f"{path} is outside enum")
     if isinstance(value, dict):
         props = schema.get("properties", {})

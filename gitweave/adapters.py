@@ -26,7 +26,10 @@ def process(command, prompt, cwd, timeout):
     try:
         stdout, stderr = child.communicate(prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
-        os.killpg(child.pid, signal.SIGKILL)
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         stdout, stderr = child.communicate()
         raise Failure("timeout", "Agent exceeded timeout", retryable=True,
                       result=Result(raw_stdout=stdout, raw_stderr=stderr))
@@ -35,7 +38,7 @@ def process(command, prompt, cwd, timeout):
 
 def quota_error(text):
     text = text.lower()
-    return any(term in text for term in ("usage limit", "usage_limit", "quota", "rate_limit", "rate limit", "insufficient credits", "out of credits"))
+    return any(term in text for term in ("usage limit", "usage_limit", "quota", "rate_limit", "rate limit", "insufficient credits", "out of credits", "hit your limit", "limit reached", "credit balance is too low"))
 
 
 def normalize(provider, stdout, stderr="", returncode=0, structured=False):
@@ -62,11 +65,16 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                 elif kind in ("turn.failed", "error"):
                     failed = True
                     diagnostics.append(event)
-            if structured and result.message:
+            if structured and not failed:
+                if not result.message:
+                    raise ValueError("Required structured result is missing")
                 envelope = json.loads(result.message)
                 result.message, result.data = envelope["message"], envelope["data"]
         else:
             for event in events:
+                if event.get("type") == "rate_limit_event" and event.get("rate_limit_info", {}).get("status") == "rejected":
+                    failed = True
+                    diagnostics.append(event)
                 if event.get("type") == "system":
                     result.session_id = event.get("session_id", result.session_id)
                 if event.get("type") == "result":
@@ -82,7 +90,9 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                         result.usage["cached_input_tokens"] = usage["cache_read_input_tokens"]
                     if "total_cost_usd" in event:
                         result.usage["cost_usd"] = event["total_cost_usd"]
-                    if structured and "structured_output" in event:
+                    if structured and not failed:
+                        if "structured_output" not in event:
+                            raise ValueError("Required structured result is missing")
                         envelope = event["structured_output"]
                         result.message, result.data = envelope["message"], envelope["data"]
         if failed or not completed:

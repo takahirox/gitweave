@@ -31,6 +31,6 @@
     "plan",
     {"map": {"path": "/0/data/tasks", "flow": ["work"]}},
     "integrate",
-    {"loop": {"flow": ["review", {"if": {"condition": {"path": "/0/data/approved", "equals": false}, "then": ["fix", "review"], "else": ["review"]}}], "while": {"path": "/0/data/approved", "equals": false}}}
+    {"loop": {"flow": ["review", {"if": {"condition": {"path": "/0/data/approved", "equals": false}, "then": ["fix", "review"], "else": []}}], "while": {"path": "/0/data/approved", "equals": false}}}
   ]
 }

@@ -187,6 +187,65 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(record["status"], "failed")
         self.assertEqual({a["status"] for a in record["attempts"]}, {"failed", "completed"})
 
+    def test_storage_failure_keeps_workspace(self):
+        from unittest.mock import patch
+        import shutil
+        run = self.runtime({"a": node()}, ["a"], lambda n, c, w: (w / "artifact").write_text("saved") and Result())
+        with patch.object(run.git, "retain", side_effect=Failure("storage", "disk unavailable")):
+            record = run.run()
+        self.assertEqual(record["status"], "failed")
+        entries = git(self.repo, "worktree", "list", "--porcelain").splitlines()
+        paths = [Path(e.removeprefix("worktree ")) for e in entries if e.startswith("worktree ")][1:]
+        self.assertEqual(len(paths), 1)
+        self.assertEqual((paths[0] / "artifact").read_text(), "saved")
+        run.git.remove_worktree(paths[0])
+        shutil.rmtree(paths[0].parent)
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_cleanup_failure_keeps_registered_worktree(self):
+        from unittest.mock import patch
+        import shutil
+        run = self.runtime({"a": node()}, ["a"], lambda *args: Result())
+        with patch.object(run.git, "remove_worktree", side_effect=Failure("cleanup", "busy")):
+            record = run.run()
+        self.assertEqual(record["status"], "completed")
+        note = self.note(run, record["attempts"][0]["commit"])
+        self.assertEqual(note["cleanup_warning"], "busy")
+        paths = [Path(e.removeprefix("worktree ")) for e in git(self.repo, "worktree", "list", "--porcelain").splitlines() if e.startswith("worktree ")][1:]
+        self.assertTrue(paths[0].exists())
+        run.git.remove_worktree(paths[0])
+        shutil.rmtree(paths[0].parent)
+
+    def test_control_rejects_unvalidated_data(self):
+        run = self.runtime({"a": node()}, ["a", {"if": {"condition": {"path": "/0/data", "equals": True}, "then": [], "else": []}}], lambda *args: Result(data=True))
+        self.assertEqual(run.run()["failure"]["kind"], "result")
+
+    def test_loop_converges_and_empty_conditional_passes_through(self):
+        calls = []
+        def work(n, c, w):
+            calls.append(c)
+            return Result(data=len(calls) < 3)
+        run = self.runtime({"a": node(schema={"type": "boolean"})},
+                           [{"loop": {"flow": ["a"], "while": {"path": "/0/data", "equals": True}}},
+                            {"if": {"condition": {"path": "/0/data", "equals": False}, "then": [], "else": ["a"]}}], work)
+        record = run.run()
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(record["outputs"][0]["data"])
+        self.assertEqual(calls[1]["workspace_base"], record["attempts"][0]["commit"])
+
+    def test_nested_parallel_obeys_global_concurrency_bound(self):
+        import time
+        count, peak = 0, 0
+        lock = threading.Lock()
+        def work(n, c, w):
+            nonlocal count, peak
+            with lock:
+                count += 1
+                peak = max(peak, count)
+            time.sleep(0.03)
+            with lock:
+                count -= 1
+            return Result()
+        run = self.runtime({"a": node()}, [{"parallel": [[{"parallel": [["a"], ["a"], ["a"]]}], ["a"]]}], work, concurrency=2)
+        self.assertEqual(run.run()["status"], "completed")
+        self.assertEqual(peak, 2)

@@ -12,7 +12,7 @@ from .actions import GitHubActions
 from .adapters import CLIAdapter
 from .git import Git
 from .graph import validate_graph
-from .model import Failure, Result, pointer, validate
+from .model import Failure, Result, equal, pointer, validate
 
 
 def now():
@@ -65,7 +65,7 @@ class Runtime:
     def matches(self, inputs, condition):
         actual = self.control_value(inputs, condition["path"])
         expected = condition["equals"]
-        return type(actual) is type(expected) and actual == expected
+        return equal(actual, expected)
 
     async def branches(self, flows, inputs, item, origin):
         results = await asyncio.gather(*(self.flow(flow, inputs, branch_item, branch_origin)
@@ -135,7 +135,7 @@ class Runtime:
                 if error is None:
                     return {"node_id": name, "instance_id": instance, "commit": commit,
                             "message": result.message, "data": result.data, "data_validated": "schema" in node}
-                if not error.retryable or attempt > self.graph.get("retries", 0):
+                if error.kind == "usage_limit" or not error.retryable or attempt > self.graph.get("retries", 0):
                     self.errors.append({"kind": error.kind, "message": str(error), "instance_id": instance})
                     self.stopped = True
                     raise error
@@ -169,15 +169,20 @@ class Runtime:
         finally:
             record.update(result=result.record(), ended_at=now(), duration_seconds=time.monotonic() - started)
             # Retain before cleanup: storage failures leave a workspace available to inspect.
+            cleaned = False
             if "status" in record:
                 self.git.retain(commit, suffix, record)
                 if workspace is not None and workspace.exists():
                     try:
                         self.git.remove_worktree(workspace)
+                        cleaned = True
                     except Failure as cleanup:
                         record["cleanup_warning"] = str(cleanup)
                         self.git.retain(commit, suffix, record)
-            shutil.rmtree(temp, ignore_errors=True)
+                else:
+                    cleaned = True
+            if cleaned:
+                shutil.rmtree(temp, ignore_errors=True)
         return result, commit, error
 
     async def execute(self):

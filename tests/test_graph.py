@@ -28,3 +28,28 @@ class GraphTests(unittest.TestCase):
         for data in ({}, {"items": [True]}, {"items": [], "other": 1}):
             with self.assertRaises(Failure):
                 validate(data, schema)
+
+    def test_malformed_types_have_deterministic_graph_errors(self):
+        for value in (True, {}, [], "1"):
+            with self.assertRaises(Failure):
+                validate_graph(dict(self.good(), version=value))
+        graph = self.good()
+        for schema in ({"type": []}, {"type": "string", "description": []}):
+            graph["nodes"]["a"]["schema"] = schema
+            with self.assertRaises(Failure):
+                validate_graph(graph)
+
+    def test_examples_are_valid(self):
+        import json
+        from pathlib import Path
+        for path in (Path(__file__).parent.parent / "examples").glob("*.json"):
+            validate_graph(json.loads(path.read_text()))
+
+    def test_json_pointer_array_indices_and_nested_equality(self):
+        from gitweave.model import equal, pointer
+        self.assertEqual(pointer({"a/b": {"~": ["value"]}}, "/a~1b/~0/0"), "value")
+        for path in ("/-1", "/01", "/~2"):
+            with self.assertRaises(Failure):
+                pointer([1, 2], path)
+        self.assertFalse(equal({"ok": [True]}, {"ok": [1]}))
+        self.assertTrue(equal({"ok": [1]}, {"ok": [1]}))

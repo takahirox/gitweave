@@ -56,3 +56,21 @@ class AdapterTests(unittest.TestCase):
                 process([sys.executable, "-c", "import time; print('partial', flush=True); time.sleep(5)"], "", cwd, 0.1)
         self.assertEqual(raised.exception.kind, "timeout")
         self.assertIn("partial", raised.exception.result.raw_stdout)
+
+    def test_native_limit_variants_do_not_retry(self):
+        examples = [
+            ("codex", '{"type":"item.completed","item":{"type":"agent_message","text":"limit message"}}\n{"type":"turn.failed","error":{"message":"You have hit your limit"}}'),
+            ("claude", '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}'),
+            ("claude", '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Your credit balance is too low"}')]
+        for provider, raw in examples:
+            with self.subTest(provider=provider, raw=raw), self.assertRaises(Failure) as raised:
+                normalize(provider, raw, structured=True)
+            self.assertEqual(raised.exception.kind, "usage_limit")
+            self.assertFalse(raised.exception.retryable)
+
+    def test_missing_structured_output_is_not_a_valid_null(self):
+        for provider, raw in [("codex", '{"type":"turn.completed","usage":{}}'),
+                              ("claude", '{"type":"result","subtype":"success","result":"no structured result"}')]:
+            with self.subTest(provider=provider), self.assertRaises(Failure) as raised:
+                normalize(provider, raw, structured=True)
+            self.assertEqual(raised.exception.kind, "protocol")
