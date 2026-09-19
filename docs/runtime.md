@@ -134,7 +134,25 @@ GitHub PR metadata and Git branch updates are separate operations: the lease ato
 
 The review-fix-merge example graph reviews structured `{approved, findings}` output, passes concrete findings to Fix, synchronizes its checkpoint, and reviews again until approved. Its `max_steps: 30` includes control steps and bounds the loop; exhaustion or invalid output fails without merging. It uses at most one additional retry per invocation. A clean first review merges without a push. Review nodes are instructed to leave files unchanged; merge's tree check catches unpublished review edits. The example's approval is a graph decision, distinct from runtime completion and GitHub policy. Comment actions are independent and can be added explicitly when desired.
 
-GitHub credentials stay with runtime-owned System Actions. Agent subprocesses receive an environment allowlist that excludes `GH_TOKEN`, `GITHUB_TOKEN`, Git configuration overrides and SSH agent sockets. Native agent authentication uses the existing home/config locations. This is authority separation, not an OS security boundary against a malicious agent: worktrees share a Git object store, and native home/config files remain available according to the CLI's sandbox. Use trusted graphs/repositories and appropriate native sandbox policy. GitWeave does not require Docker or disable native permission checks.
+Agent subprocesses inherit a copy of the normal parent environment by default. Unknown development variables, toolchain paths, package registry settings and credentials, proxy settings (including `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and lowercase forms), and general certificate settings remain available. Native Codex and Claude authentication also inherits normally: home/config locations, API keys, OAuth tokens and provider-specific configuration are preserved. GitWeave does not maintain a development-variable allowlist.
+
+The focused exclusions below remove publication credentials and overrides that grant or redirect repository, configuration, credential or transport authority. Names are exact except the two explicitly listed prefix families; GitWeave does not strip all `GIT_*`, `GH_*`, `SSH_*` or provider variables.
+
+| Excluded names / families | Authority implication |
+| --- | --- |
+| `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` | GitHub and enterprise publication credentials. |
+| `GH_HOST`, `GH_REPO`, `GH_CONFIG_DIR` | Select a GitHub host/repository or an alternate CLI configuration containing credentials. |
+| `SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE` | Access or control the parent's SSH agent, or select an SSH credential prompt program. |
+| `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`, `GIT_CEILING_DIRECTORIES`, `GIT_DISCOVERY_ACROSS_FILESYSTEM`, `GIT_SHALLOW_FILE`, `GIT_REPLACE_REF_BASE`, `GIT_NO_REPLACE_OBJECTS` | Redirect repository discovery, storage, refs or the object view away from the assigned worktree's normal Git context. |
+| All names starting with `GIT_CONFIG` | Redirect configuration files or inject configuration, including credential helpers, remote URLs, headers and hooks. Covers `GIT_CONFIG`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and every indexed `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` entry. |
+| `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR` | Select alternate Git executables/helpers or repository templates that can install configuration/hooks. |
+| `GIT_ASKPASS`, `GIT_TERMINAL_PROMPT`, all names starting with `GIT_CREDENTIAL_` | Override credential acquisition, including settings consumed by credential helpers. |
+| `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_SSH_VARIANT`, `GIT_PROXY_COMMAND`, `GIT_ALLOW_PROTOCOL`, `GIT_PROTOCOL`, `GIT_PROTOCOL_FROM_USER` | Replace Git transport commands or alter transport/protocol selection and restrictions. Ordinary development proxy variables still inherit. |
+| `GIT_SSL_NO_VERIFY`, `GIT_SSL_CAINFO`, `GIT_SSL_CAPATH`, `GIT_SSL_CERT`, `GIT_SSL_KEY`, `GIT_SSL_CERT_PASSWORD_PROTECTED`, `GIT_PROXY_SSL_CAINFO`, `GIT_PROXY_SSL_CERT`, `GIT_PROXY_SSL_KEY`, `GIT_PROXY_SSL_CERT_PASSWORD_PROTECTED` | Override Git transport trust or provide client/proxy certificate authentication. |
+
+Filtering creates a new mapping without changing the parent's `os.environ` and does not log environment values. Runtime-owned GitHub System Actions use a separate parent-environment copy and retain their publication credentials; their existing fixed `GH_HOST=github.com` behavior is unchanged. The runtime Git wrapper's existing environment handling is also unchanged.
+
+This is authority separation, not an OS security boundary against a malicious agent or a general environment sandbox. Worktrees share a Git object store, native home/config files and on-disk credentials remain available according to the CLI's sandbox, and inherited development settings may themselves carry authority. Use trusted graphs/repositories and appropriate native sandbox policy. GitWeave does not require Docker or disable native permission checks.
 
 ## Validation and live smoke
 

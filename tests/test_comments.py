@@ -179,12 +179,19 @@ class CommentTests(unittest.TestCase):
 
     def test_runtime_owned_transport_credentials(self):
         action = GitHubActions(self.git, "run")
-        with patch.dict(os.environ, {"GH_TOKEN": "runtime-only", "GITHUB_TOKEN": "runtime-only"}):
+        authority = {key: "fake-runtime" for key in (
+            "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+            "GH_CONFIG_DIR", "SSH_AUTH_SOCK", "SSH_ASKPASS", "GIT_SSH_COMMAND",
+            "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0")}
+        parent = dict(authority, GH_HOST="fake.enterprise.invalid", CUSTOM_TOOLCHAIN="fake-dev")
+        with patch.dict(os.environ, parent, clear=True):
+            self.assertEqual(agent_environment(), {"CUSTOM_TOOLCHAIN": "fake-dev"})
             with patch("gitweave.actions.subprocess.run", return_value=Mock(returncode=0, stdout="{}")) as command:
                 action.gh("api", "repos/owner/repo/issues/9")
-            self.assertEqual(command.call_args.kwargs["env"]["GH_TOKEN"], "runtime-only")
-            self.assertNotIn("GH_TOKEN", agent_environment())
-            self.assertNotIn("GITHUB_TOKEN", agent_environment())
+            # System Actions retain runtime authority and their existing fixed host.
+            self.assertEqual(command.call_args.kwargs["env"], dict(parent, GH_HOST="github.com"))
+            self.assertEqual(dict(os.environ), parent)
+            self.assertEqual(agent_environment(), {"CUSTOM_TOOLCHAIN": "fake-dev"})
         for failure in (OSError("missing gh"), subprocess.TimeoutExpired("gh", 120)):
             with patch("gitweave.actions.subprocess.run", side_effect=failure):
                 with self.assertRaises(Failure) as error:
