@@ -16,6 +16,21 @@ class GraphTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(Failure):
                 validate_graph(dict(self.good(), **change))
 
+    def test_timeout_omission_and_explicit_positive_values(self):
+        validated = validate_graph(self.good())
+        self.assertNotIn("timeout", validated)
+        for timeout in (1, 0.25, 1800):
+            with self.subTest(timeout=timeout):
+                self.assertEqual(validate_graph(dict(self.good(), timeout=timeout))["timeout"], timeout)
+
+    def test_invalid_explicit_timeouts(self):
+        for timeout in (None, True, False, "1800", 0, -1, -0.5,
+                        float("inf"), float("-inf"), float("nan"), [], {}):
+            with self.subTest(timeout=timeout), self.assertRaises(Failure) as raised:
+                validate_graph(dict(self.good(), timeout=timeout))
+            self.assertEqual(raised.exception.kind, "graph")
+            self.assertEqual(str(raised.exception), "timeout must be finite and positive")
+
     def test_unknown_schema_keywords_are_rejected(self):
         graph = self.good()
         graph["nodes"]["a"]["schema"] = {"type": "string", "pattern": "a"}
