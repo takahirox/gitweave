@@ -125,7 +125,7 @@ class GitHubActions:
         # REST merges immediately or rejects; unlike `gh pr merge`, it cannot queue.
         reply = json.loads(self.gh("api", "--method", "PUT",
                                   f"repos/{repository}/pulls/{number}/merge",
-                                  "-f", f"sha={expected}", "-f", "merge_method=squash"))
+                                  "-f", f"sha={expected}", "-f", "merge_method=merge"))
         if reply.get("merged") is not True:
             raise Failure("merge_policy", reply.get("message", "GitHub rejected the merge"))
         return Result(message="PR merged", data={"merged": True, "url": pr["url"],

@@ -53,7 +53,7 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(result.data["merge_commit"], "integrated")
         merge_args = self.actions.gh.call_args.args
         self.assertEqual(merge_args, ("api", "--method", "PUT", "repos/owner/repo/pulls/1/merge",
-                                     "-f", "sha=" + "a" * 40, "-f", "merge_method=squash"))
+                                     "-f", "sha=" + "a" * 40, "-f", "merge_method=merge"))
 
     def test_merge_retry_is_idempotent(self):
         self.actions.publish_bases["pub"] = "main"
@@ -84,9 +84,25 @@ class ActionTests(unittest.TestCase):
             self.actions.run("merge", self.merge, self.context)
         self.assertEqual(self.actions.gh.call_count, 1)
         pr["baseRefName"] = "main"
-        self.actions.gh.side_effect = [json.dumps(pr), json.dumps({"merged": False, "message": "GitHub requires checks"})]
-        with self.assertRaisesRegex(Failure, "requires checks"):
-            self.actions.run("merge", self.merge, self.context)
+        for response, diagnostic, kind, retryable in (
+                (json.dumps({"merged": False, "message": "Required checks pending"}),
+                 "Required checks pending", "merge_policy", False),
+                (Failure("github", "HTTP 405: Required reviews missing", retryable=True),
+                 "Required reviews missing", "github", True),
+                (json.dumps({"merged": False, "message": "Merge commits are not allowed"}),
+                 "Merge commits are not allowed", "merge_policy", False),
+                (Failure("github", "HTTP 405: Merge commits are not allowed", retryable=True),
+                 "HTTP 405: Merge commits are not allowed", "github", True)):
+            with self.subTest(diagnostic=diagnostic):
+                self.actions.gh = Mock(side_effect=[json.dumps(pr), response])
+                with self.assertRaisesRegex(Failure, diagnostic) as raised:
+                    self.actions.run("merge", self.merge, self.context)
+                self.assertEqual(raised.exception.kind, kind)
+                self.assertEqual(raised.exception.retryable, retryable)
+                self.assertEqual(self.actions.gh.call_count, 2)
+                self.assertEqual(self.actions.gh.call_args.args,
+                                 ("api", "--method", "PUT", "repos/owner/repo/pulls/1/merge",
+                                  "-f", "sha=" + "a" * 40, "-f", "merge_method=merge"))
 
     def test_managed_merge_timeout_after_success(self):
         self.actions.published["pub"] = "a" * 40
