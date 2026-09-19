@@ -20,7 +20,7 @@ Verify that the Pull Request addresses all parts of the Issue that it claims to 
 
 Do not approve a Pull Request as closing an Issue when important requirements remain unimplemented.
 
-If the change is intentionally partial, the Pull Request should say so and the Issue should remain open unless the remaining work is tracked separately in a way that preserves the original intent.
+If the change is intentionally partial, the Pull Request should say so and the Issue should remain open.
 
 ## Check for Unnecessary Work
 
