@@ -32,8 +32,9 @@ def validate_graph(graph):
     for key, default, minimum in [("concurrency", 4, 1), ("max_steps", 100, 1), ("retries", 0, 0)]:
         value = graph.get(key, default)
         require(type(value) is int and value >= minimum, f"{key} must be an integer >= {minimum}")
-    timeout = graph.get("timeout", 600)
-    require(type(timeout) in (float, int) and math.isfinite(timeout) and timeout > 0, "timeout must be finite and positive")
+    if "timeout" in graph:
+        timeout = graph["timeout"]
+        require(type(timeout) in (float, int) and math.isfinite(timeout) and timeout > 0, "timeout must be finite and positive")
     nodes = graph.get("nodes")
     require(isinstance(nodes, dict) and bool(nodes), "nodes must be a nonempty object")
     for name, node in nodes.items():

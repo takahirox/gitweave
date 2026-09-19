@@ -1,9 +1,12 @@
 import json
+import signal
 import subprocess
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, call, patch
+from gitweave.adapters import CLIAdapter
 from gitweave.runtime import Runtime
 from gitweave.model import Failure, Result
 
@@ -65,6 +68,85 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base)
         self.assertFalse((self.repo / "artifact.txt").exists())
         self.assertEqual(len(git(self.repo, "worktree", "list").splitlines()), 1)
+
+    def test_timeout_reaches_subprocess_wait_unchanged(self):
+        for provider in ("codex", "claude"):
+            raw = (Path(__file__).parent / "fixtures" / f"{provider}.jsonl").read_text()
+            for options in ({}, {"timeout": 1800}, {"timeout": 0.25}):
+                with self.subTest(provider=provider, options=options):
+                    agent = node()
+                    agent["provider"] = provider
+                    run = Runtime(graph({"a": agent}, ["a"], **options), self.repo,
+                                  self.base, "request", adapters={provider: CLIAdapter(provider)})
+                    child = Mock(returncode=0)
+                    child.communicate.return_value = (raw, "")
+                    with patch("gitweave.adapters.subprocess",
+                               Mock(Popen=Mock(return_value=child), PIPE=subprocess.PIPE,
+                                    TimeoutExpired=subprocess.TimeoutExpired)), \
+                            patch("gitweave.adapters.os.killpg") as kill:
+                        record = run.run()
+                    self.assertEqual(record["status"], "completed", record.get("failure"))
+                    child.communicate.assert_called_once()
+                    self.assertEqual(child.communicate.call_args.kwargs, {"timeout": options.get("timeout")})
+                    kill.assert_not_called()
+                    self.assertEqual("timeout" in run.graph, "timeout" in options)
+
+    def test_explicit_timeout_retains_evidence_and_obeys_retry_policy(self):
+        for retries, recover in ((0, False), (2, False), (1, True)):
+            with self.subTest(retries=retries, recover=recover):
+                agent = node()
+                agent["provider"] = "codex"
+                run = Runtime(graph({"a": agent}, ["a"], timeout=0.25, retries=retries),
+                              self.repo, self.base, "request", adapters={"codex": CLIAdapter("codex")})
+                children = []
+                for index in range(retries + 1):
+                    child = Mock(pid=12345 + index, returncode=-signal.SIGKILL)
+                    child.communicate.side_effect = [
+                        subprocess.TimeoutExpired("codex", 0.25),
+                        (f"partial stdout {index}", f"partial stderr {index}"),
+                    ]
+                    children.append(child)
+                if recover:
+                    children[-1].communicate.side_effect = [('{"type":"turn.completed","usage":{}}', "")]
+                    children[-1].returncode = 0
+                launch = Mock(side_effect=children)
+                with patch("gitweave.adapters.subprocess",
+                           Mock(Popen=launch, PIPE=subprocess.PIPE,
+                                TimeoutExpired=subprocess.TimeoutExpired)), \
+                        patch("gitweave.adapters.os.killpg") as kill:
+                    record = run.run()
+                self.assertEqual(record["status"], "completed" if recover else "failed")
+                if not recover:
+                    self.assertEqual(record["failure"]["kind"], "timeout")
+                self.assertEqual(len(record["attempts"]), retries + 1)
+                failures = children[:-1] if recover else children
+                self.assertEqual(kill.call_args_list, [call(c.pid, signal.SIGKILL) for c in failures])
+                self.assertTrue(all(c.kwargs["start_new_session"] for c in launch.call_args_list))
+                notes = [self.note(run, a["commit"]) for a in record["attempts"]]
+                self.assertEqual(len({n["instance_id"] for n in notes}), 1)
+                for index, (child, attempt, note) in enumerate(zip(children, record["attempts"], notes)):
+                    self.assertEqual(child.communicate.call_args_list[0].kwargs, {"timeout": 0.25})
+                    self.assertEqual(note["attempt"], index + 1)
+                    self.assertEqual(note["workspace_base"], self.base)
+                    self.assertEqual(note["input_commits"], [self.base])
+                    self.assertEqual(note["node_id"], "a")
+                    self.assertEqual(note["provider"], "codex")
+                    self.assertIn("started_at", note)
+                    self.assertIn("ended_at", note)
+                    self.assertGreaterEqual(note["duration_seconds"], 0)
+                    self.assertEqual(git(self.repo, "rev-parse", attempt["commit"] + "^"), self.base)
+                    ref = f"refs/gitweave/{run.id}/attempts/{note['instance_id']}/{index + 1}"
+                    self.assertEqual(git(self.repo, "rev-parse", ref), attempt["commit"])
+                    if index < len(failures):
+                        self.assertEqual(child.communicate.call_args_list[1], call())
+                        self.assertEqual(note["status"], "failed")
+                        self.assertEqual(note["failure"]["kind"], "timeout")
+                        self.assertTrue(note["failure"]["retryable"])
+                        self.assertEqual(note["result"]["raw_stdout"], f"partial stdout {index}")
+                        self.assertEqual(note["result"]["raw_stderr"], f"partial stderr {index}")
+                stored = json.loads(git(self.repo, "show", f"{record['run_ref']}:run.json"))
+                self.assertEqual(stored["attempts"], record["attempts"])
+                self.assertEqual(len(git(self.repo, "worktree", "list").splitlines()), 1)
 
     def test_parallel_isolation_join_and_input_order(self):
         barrier = threading.Barrier(2)

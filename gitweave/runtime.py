@@ -174,7 +174,7 @@ class Runtime:
             if node["kind"] == "agent":
                 workspace = temp / "workspace"
                 self.git.add_worktree(workspace, context["workspace_base"])
-                result = self.adapters[node["provider"]].run(node, context, workspace, self.graph.get("timeout", 600))
+                result = self.adapters[node["provider"]].run(node, context, workspace, self.graph.get("timeout"))
             else:
                 result = self.actions.run(name, node, context)
             if "schema" in node:
