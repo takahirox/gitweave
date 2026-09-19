@@ -33,16 +33,20 @@ def validate_graph(graph):
             for option in ("model", "effort"):
                 require(option not in node or isinstance(node[option], str), f"{name}: {option} must be text")
         else:
-            require(node.get("action") in ("publish_pr", "merge_pr"), f"{name}: unknown action")
+            require(node.get("action") in ("publish_pr", "sync_pr", "merge_pr"), f"{name}: unknown action")
             cfg = node.get("config", {})
             require(isinstance(cfg, dict), f"{name}: config must be an object")
             require(set(cfg) <= {"repository", "base", "title", "body", "publish_node"}, f"{name}: unknown action option")
-            require(isinstance(cfg.get("repository"), str) and bool(re.fullmatch(r"[\w.-]+/[\w.-]+", cfg["repository"])), f"{name}: repository must be owner/name")
+            input_action = node["action"] == "sync_pr" or (node["action"] == "merge_pr" and "publish_node" not in cfg)
+            if input_action:
+                require(not cfg, f"{name}: input PR actions require empty config")
+            else:
+                require(isinstance(cfg.get("repository"), str) and bool(re.fullmatch(r"[\w.-]+/[\w.-]+", cfg["repository"])), f"{name}: repository must be owner/name")
             require("body" not in cfg or isinstance(cfg["body"], str), f"{name}: body must be text")
             if node["action"] == "publish_pr":
                 require(isinstance(cfg.get("base"), str) and bool(cfg["base"]) and not cfg["base"].startswith("-"), f"{name}: base branch required")
                 require(isinstance(cfg.get("title"), str) and bool(cfg["title"]), f"{name}: title required")
-            else:
+            elif not input_action:
                 require(isinstance(cfg.get("publish_node"), str), f"{name}: publish_node must be a node ID")
                 pub = nodes.get(cfg["publish_node"], {})
                 require(isinstance(pub, dict) and isinstance(pub.get("config"), dict), f"{name}: invalid publisher")

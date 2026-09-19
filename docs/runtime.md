@@ -69,7 +69,43 @@ Raw logs can contain repository or prompt content; keep these local records unde
 
 `publish_pr` pushes the selected workspace-base artifact to `gitweave/<run-id>/<declared-node-id>` and creates or updates its PR. Revisit the same publisher node after fixes to synchronize the same PR. Updates use an exact force-with-lease and refuse externally changed heads; a retry recognizes its already-published exact commit. Actions are serialized within a Run.
 
-`merge_pr` takes `config.repository` and `config.publish_node` identifying a publisher in this graph. It checks the exact published head and GitHub's `reviewDecision == APPROVED`, then requests a squash merge with `--match-head-commit`, without admin bypass. An unapproved PR returns `data.merged=false` as a task outcome. Declare a result schema if routing on this result. A retry of a completed merge is idempotent. Repository branch protection remains authoritative; no background auto-merge is scheduled.
+`merge_pr` with `config.repository` and `config.publish_node` targets a publisher in this graph. With empty/omitted `config`, it targets the existing input PR. It requires the exact known remote head and the original base branch. The selected workspace artifact must have the same tree as that remote commit: empty review/action checkpoints are allowed, but unpublished file changes must be synchronized first.
+
+Review/task correctness belongs to the graph. `merge_pr` has no independent `reviewDecision` gate. It requests an immediate squash merge through [GitHub's merge REST endpoint](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request), with `sha` set to the exact known remote commit. GitHub enforces repository policy, required checks/reviews, and allowed merge methods. Rejections surface as failures with GitHub's diagnostic; GitWeave does not use admin bypass or queue auto-merge (including for repositories requiring a merge queue). Successful results contain `merged: true`, `url`, and `merge_commit`. A retry after a successful merge, including a success followed by a transport timeout, recognizes the already-merged exact head.
+
+## Existing Pull Request input
+
+```sh
+gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10 \
+  "Review this PR, fix remaining problems, and merge it when clean."
+```
+
+The input modes are deliberately small and mutually exclusive:
+
+- `--repo /path/to/local/repository --commit COMMIT` preserves the existing local input flow.
+- `--repo owner/repo --pr NUMBER` accepts a positive PR number on github.com. PR URLs, other hosts, and local checkout paths with `--pr` are not supported. A relative `owner/repo` string in PR mode always means a GitHub identity, even if a directory with that name exists.
+
+PR mode creates a persistent bare object store at `.gitweave/runs/<run-id>/repository.git` under the invoking directory. The CLI includes its absolute `repository` path in its output; use `git -C PATH show RUN_REF:run.json` to inspect it. The store is retained for artifact/history access, including when execution fails, and is not automatically deleted. Initialization failures may leave a partial store. No local clone is required, and no existing checkout is modified by initialization.
+
+Initialization resolves an open PR and fetches `refs/pull/<number>/head` from its base repository, checking that it is exactly the resolved head SHA; it never starts from GitHub's synthetic merge commit. It also fetches the resolved base commit and verifies the PR metadata again before scheduling nodes. A fetch mismatch or changed PR fails initialization. Both commits are retained under `refs/gitweave/<run-id>/input/{head,base}`.
+
+`run.json.input_pr` and every node's `context.input_pr` expose the initial `number`, base `repository` and `repository_id`, `head_repository` and `head_repository_id` (nullable if deleted), `head_branch`, `head_sha`, `base_branch`, `base_sha`, `url`, `state`, and `merge_commit`. Only these selected fields are retained, not the raw API response or authentication material. `base_sha` is the frozen review comparison commit, not a moving branch name. Ordinary advancement of the same base branch after initialization is allowed; retargeting to another branch is a conflict. GitHub remains responsible for current mergeability and repository policy.
+
+The initial `head_sha` stays immutable. `pr_remote_sha` in node context and the Run record tracks the last successfully verified remote head separately from local artifact/checkpoint commits. Nodes receive the current selected artifact in `workspace_base` as usual. Action result commits are provenance checkpoints, not necessarily the pushed SHA.
+
+`sync_pr` requires existing-PR input, `workspace_base`, and empty/omitted `config`:
+
+```json
+{"kind": "action", "action": "sync_pr", "workspace_base": 0, "config": {}}
+```
+
+It updates that same PR's head branch with the selected artifact. Before mutation it verifies PR identity, repositories, head branch, base branch, open state, current permission to push, API head SHA, and the exact branch SHA from `ls-remote`. A single-ref `push --force-with-lease=refs/heads/BRANCH:KNOWN_SHA` provides the atomic compare-and-update; a competing write between inspection and push is rejected by Git. It never uses a tracking-ref-derived lease or an unconditional force push. It checks PR metadata/head again after pushing. A retry recognizes the exact target commit when a successful push timed out, and does not push it twice. An external move, closed PR, deleted head, or retarget fails instead of silently adopting the new state.
+
+Cross-repository (fork) and deleted-repository heads may be read as inputs when GitHub's PR ref is available, but `sync_pr` and unmerged input `merge_pr` explicitly reject them. Same-repository mutations require GitHub's current `permissions.push`; insufficient permissions fail before mutation. GitWeave never substitutes the base repository's same-named branch for a fork head. These are intentionally unsupported mutation cases, not invitations to use another credential or manual push.
+
+GitHub PR metadata and Git branch updates are separate operations: the lease atomically protects the head SHA, but cannot lock PR closure/retargeting. Metadata changes observed before or after synchronization stop the Run; a post-push failure may mean the exact artifact was already pushed. Merge's SHA precondition protects its head; base retargeting is checked before the request, not atomically locked by GitHub's merge API. No automatic rollback overwrites a concurrent actor's changes. Start a new Run to adopt a changed PR. Retry state is in-process; v0 still has no crash-resume command.
+
+The example graph reviews structured `{approved, findings}` output, passes concrete findings to Fix, synchronizes its checkpoint, and reviews again until approved. Its `max_steps: 30` includes control steps and bounds the loop; exhaustion or invalid output fails without merging. It uses at most one additional retry per invocation. A clean first review merges without a push. Review nodes are instructed to leave files unchanged; merge's tree check catches unpublished review edits. The example's approval is a graph decision, distinct from runtime completion and GitHub policy. It neither posts comments nor implements Issue #9 comment actions.
 
 GitHub credentials stay with runtime-owned System Actions. Agent subprocesses receive an environment allowlist that excludes `GH_TOKEN`, `GITHUB_TOKEN`, Git configuration overrides and SSH agent sockets. Native agent authentication uses the existing home/config locations. This is authority separation, not an OS security boundary against a malicious agent: worktrees share a Git object store, and native home/config files remain available according to the CLI's sandbox. Use trusted graphs/repositories and appropriate native sandbox policy. GitWeave does not require Docker or disable native permission checks.
 
