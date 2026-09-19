@@ -124,3 +124,19 @@ gitweave run --graph examples/single.json --repo /path/to/repo --commit HEAD "Im
 ```
 
 See the [runtime guide](docs/runtime.md) for graph syntax, parallel execution, fan-out, review/fix loops, Git records, explicit PR actions, and validation. [The parallel example](examples/parallel.json) combines both providers in one graph.
+
+## Validate a graph
+
+Check a graph before executing it:
+
+```sh
+gitweave validate --graph examples/single.json
+# Also available through the shared Python CLI:
+python -m gitweave validate --graph examples/single.json
+```
+
+The command checks JSON syntax, graph structure, node references, and supported result schemas. It prints success to stdout and exits with status 0, or prints an input-error diagnostic to stderr and exits with status 2.
+
+Validation needs no target repository, base commit, user request, installed agent CLIs, or agent/GitHub credentials. It creates no Run, invokes no agents or System Actions, accesses no network, and does not modify repository state.
+
+Success means the graph passes static validation. It does not check provider availability, authentication, runtime-dependent input values, or semantic task correctness, and does not guarantee that agent execution or the task outcome will succeed.
