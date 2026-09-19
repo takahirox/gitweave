@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "max_steps": 30,
+  "retries": 1,
+  "nodes": {
+    "review": {
+      "kind": "agent",
+      "provider": "codex",
+      "workspace_base": 0,
+      "instruction": "Review the selected artifact against the request and input_pr.base_sha. Inspect the full diff and run relevant deterministic tests. Leave files unchanged. Set approved=true only when no concrete findings remain; otherwise return actionable findings. Runtime completion is not approval. Do not publish, push, merge, or post comments.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "approved": {"type": "boolean"},
+          "findings": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["approved", "findings"],
+        "additionalProperties": false
+      }
+    },
+    "fix": {
+      "kind": "agent",
+      "provider": "codex",
+      "workspace_base": 0,
+      "instruction": "Fix the concrete findings in inputs[0].data.findings in the assigned worktree. Run relevant deterministic tests and summarize fixes. Leave final files for the runtime checkpoint. Do not publish, push, merge, or post comments."
+    },
+    "sync": {"kind": "action", "action": "sync_pr", "workspace_base": 0, "config": {}},
+    "merge": {"kind": "action", "action": "merge_pr", "workspace_base": 0, "config": {}}
+  },
+  "flow": [
+    "review",
+    {"loop": {
+      "flow": [{"if": {
+        "condition": {"path": "/0/data/approved", "equals": true},
+        "then": [],
+        "else": ["fix", "sync", "review"]
+      }}],
+      "while": {"path": "/0/data/approved", "equals": false}
+    }},
+    "merge"
+  ]
+}
