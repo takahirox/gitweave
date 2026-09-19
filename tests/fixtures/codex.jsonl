@@ -1,0 +1,3 @@
+{"type":"thread.started","thread_id":"codex-session"}
+{"type":"item.completed","item":{"type":"agent_message","text":"{\"message\":\"done\",\"data\":{\"ok\":true}}"}}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":20}}
