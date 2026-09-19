@@ -31,12 +31,81 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(Failure):
             normalize("codex", '{"type":"thread.started"}')
 
-    def test_environment_excludes_publication_credentials(self):
-        with patch.dict(os.environ, {"GH_TOKEN": "private", "GITHUB_TOKEN": "private", "GIT_CONFIG_COUNT": "1", "SSH_AUTH_SOCK": "private", "OPENAI_API_KEY": "agent"}):
-            env = agent_environment()
-            for key in ("GH_TOKEN", "GITHUB_TOKEN", "GIT_CONFIG_COUNT", "SSH_AUTH_SOCK"):
-                self.assertNotIn(key, env)
-            self.assertEqual(env["OPENAI_API_KEY"], "agent")
+    def test_environment_inherits_development_and_native_authentication(self):
+        keys = (
+            "PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "LANG", "LC_CTYPE",
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy",
+            "NPM_CONFIG_REGISTRY", "NPM_TOKEN", "PIP_INDEX_URL", "UV_INDEX_URL",
+            "CARGO_HOME", "RUSTUP_HOME", "JAVA_HOME", "VIRTUAL_ENV", "PYTHONPATH",
+            "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CUSTOM_DEVELOPMENT_SETTING",
+            "CODEX_HOME", "OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL",
+            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+            "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR",
+            "AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS", "CLAUDE_CODE_USE_BEDROCK",
+            "GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL", "GIT_EDITOR", "GIT_PAGER",
+            "GIT_LFS_SKIP_SMUDGE", "GIT_OPTIONAL_LOCKS", "GH_PAGER", "SSH_TTY",
+        )
+        parent = {key: "fake-" + key for key in keys}
+        with patch.dict(os.environ, parent, clear=True):
+            self.assertEqual(agent_environment(), parent)
+
+    def test_environment_excludes_authority_families(self):
+        families = {
+            "github": (
+                "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+                "GH_HOST", "GH_REPO", "GH_CONFIG_DIR"),
+            "ssh": ("SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE"),
+            "repository": (
+                "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
+                "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_SHALLOW_FILE",
+                "GIT_REPLACE_REF_BASE", "GIT_NO_REPLACE_OBJECTS"),
+            "config": (
+                "GIT_CONFIG", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
+                "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0",
+                "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_123", "GIT_CONFIG_VALUE_123",
+                "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR"),
+            "credential": (
+                "GIT_ASKPASS", "GIT_TERMINAL_PROMPT", "GIT_CREDENTIAL_HELPER",
+                "GIT_CREDENTIAL_INTERACTIVE"),
+            "transport": (
+                "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_PROXY_COMMAND",
+                "GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL", "GIT_PROTOCOL_FROM_USER",
+                "GIT_SSL_NO_VERIFY", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_SSL_CERT",
+                "GIT_SSL_KEY", "GIT_SSL_CERT_PASSWORD_PROTECTED", "GIT_PROXY_SSL_CAINFO",
+                "GIT_PROXY_SSL_CERT", "GIT_PROXY_SSL_KEY", "GIT_PROXY_SSL_CERT_PASSWORD_PROTECTED"),
+        }
+        for family, keys in families.items():
+            with self.subTest(family=family):
+                parent = {key: "fake-authority" for key in keys}
+                parent["CUSTOM_TOOLCHAIN_SETTING"] = "fake-development"
+                with patch.dict(os.environ, parent, clear=True):
+                    self.assertEqual(agent_environment(), {"CUSTOM_TOOLCHAIN_SETTING": "fake-development"})
+                    self.assertEqual(dict(os.environ), parent)
+
+    def test_environment_is_an_independent_copy(self):
+        parent = {"GH_TOKEN": "fake-runtime", "HOME": "/fake/home", "CUSTOM": "fake-dev"}
+        with patch.dict(os.environ, parent, clear=True):
+            child = agent_environment()
+            child["HOME"] = "/fake/child"
+            child["NEW"] = "fake-new"
+            del child["CUSTOM"]
+            self.assertEqual(dict(os.environ), parent)
+            self.assertEqual(agent_environment(), {"HOME": "/fake/home", "CUSTOM": "fake-dev"})
+
+    def test_process_passes_filtered_environment_to_child(self):
+        parent = {"GH_TOKEN": "fake-runtime", "SSH_AUTH_SOCK": "/fake/socket",
+                  "CUSTOM_TOOLCHAIN": "fake-toolchain", "CLAUDE_CODE_OAUTH_TOKEN": "fake-native"}
+        with patch.dict(os.environ, parent, clear=True):
+            with patch("gitweave.adapters.subprocess.Popen") as popen:
+                popen.return_value.communicate.return_value = ("fake-output", "")
+                popen.return_value.returncode = 0
+                self.assertEqual(process(["fake-agent"], "prompt", "/fake/workspace", 10),
+                                 (0, "fake-output", ""))
+            self.assertEqual(popen.call_args.kwargs["env"], {
+                "CUSTOM_TOOLCHAIN": "fake-toolchain", "CLAUDE_CODE_OAUTH_TOKEN": "fake-native"})
+            self.assertEqual(dict(os.environ), parent)
 
     def test_commands_use_native_cli_and_structured_envelope(self):
         for provider in ("codex", "claude"):

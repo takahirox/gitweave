@@ -8,12 +8,38 @@ import tempfile
 from .model import Failure, Result
 
 
+# These overrides carry credentials or redirect repository/configuration/transport
+# authority. Ordinary development settings (including other GIT_* settings) inherit.
+# Keep the rationale and complete families documented in docs/runtime.md.
+_AGENT_ENV_EXCLUSIONS = frozenset({
+    "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+    "GH_HOST", "GH_REPO", "GH_CONFIG_DIR",
+    "SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
+    "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_SHALLOW_FILE",
+    "GIT_REPLACE_REF_BASE", "GIT_NO_REPLACE_OBJECTS",
+    "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR",
+    "GIT_ASKPASS", "GIT_TERMINAL_PROMPT",
+    "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_PROXY_COMMAND",
+    "GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL", "GIT_PROTOCOL_FROM_USER",
+    "GIT_SSL_NO_VERIFY", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_SSL_CERT",
+    "GIT_SSL_KEY", "GIT_SSL_CERT_PASSWORD_PROTECTED",
+    "GIT_PROXY_SSL_CAINFO", "GIT_PROXY_SSL_CERT", "GIT_PROXY_SSL_KEY",
+    "GIT_PROXY_SSL_CERT_PASSWORD_PROTECTED",
+})
+_AGENT_ENV_EXCLUDED_PREFIXES = ("GIT_CONFIG", "GIT_CREDENTIAL_")
+
+
 def agent_environment():
-    # Preserve native agent login locations, but do not forward publication authority.
-    allowed = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TEMP", "TMP",
-               "LANG", "LC_ALL", "TERM", "CODEX_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
-               "OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
-    return {k: v for k, v in os.environ.items() if k in allowed}
+    """Copy the parent environment without publication authority overrides.
+
+    Native agent authentication and ordinary toolchain settings remain available.
+    This is authority separation, not an OS security boundary.
+    """
+    return {key: value for key, value in os.environ.items()
+            if key not in _AGENT_ENV_EXCLUSIONS
+            and not key.startswith(_AGENT_ENV_EXCLUDED_PREFIXES)}
 
 
 def process(command, prompt, cwd, timeout):
