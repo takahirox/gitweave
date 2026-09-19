@@ -14,7 +14,7 @@ Version 1 uses JSON, with `version: 1`, a `nodes` object and a nonempty `flow` a
 
 Agent nodes specify `provider`, `instruction`, optional `model` and `effort`, and optional `schema` for result data. Built-in providers are `codex` and `claude`; the Python runtime accepts additional adapters through dependency injection. Model and effort are passed to the chosen CLI; unsupported settings fail visibly rather than being silently substituted. Provider defaults apply if omitted.
 
-The adapter receives a context containing the request, input commits/messages/data, selected workspace-base commit, and any fan-out item. It must return a `Result`; provider-native events, stderr, session IDs, usage and cost fields are preserved when available. No token/cost estimates are invented. The configured model/effort and raw events retain both requested and provider-reported information.
+The adapter receives a context containing the request, input commits/messages/data, selected workspace-base commit, and any fan-out item. Both agents and actions also receive `instance_id`, the same invocation identity recorded in attempt provenance: stable across retries, distinct across loop iterations and fan-out items. It must return a `Result`; provider-native events, stderr, session IDs, usage and cost fields are preserved when available. No token/cost estimates are invented. The configured model/effort and raw events retain both requested and provider-reported information.
 
 An optional `schema` validates `data`. The supported JSON Schema subset is `type` (object, array, string, integer, number, boolean, null), `properties`, `required`, boolean `additionalProperties`, `items`, `enum`, and `description`. Unknown keywords are rejected. Provider-specific schema restrictions also apply; for portable structured outputs use fully specified objects with `required` and `additionalProperties: false`, as in the examples. Both adapters request an envelope containing a human-readable `message` plus `data`.
 
@@ -73,6 +73,29 @@ Raw logs can contain repository or prompt content; keep these local records unde
 
 Review/task correctness belongs to the graph. `merge_pr` has no independent `reviewDecision` gate. It requests an immediate squash merge through [GitHub's merge REST endpoint](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request), with `sha` set to the exact known remote commit. GitHub enforces repository policy, required checks/reviews, and allowed merge methods. Rejections surface as failures with GitHub's diagnostic; GitWeave does not use admin bypass or queue auto-merge (including for repositories requiring a merge queue). Successful results contain `merged: true`, `url`, and `merge_commit`. A retry after a successful merge, including a success followed by a transport timeout, recognizes the already-merged exact head.
 
+### Ordinary Issue and PR comments
+
+`comment_issue` and `comment_pr` post ordinary comments to an explicit GitHub repository and positive integer Issue/PR number. They require neither a publisher nor an existing-PR Run input, managed branch, synchronization, approval, or merge. Fork PRs and closed targets can receive comments when GitHub permits it. The action verifies the target number and Issue/PR type before posting; GitHub enforces comment permissions. These actions never submit formal reviews or approval states.
+
+```json
+{
+  "kind": "action",
+  "action": "comment_pr",
+  "workspace_base": 0,
+  "config": {
+    "repository": "owner/repo",
+    "number": 9,
+    "body_path": "/0/message"
+  }
+}
+```
+
+Use exactly one of `body_path` or literal `body`. `body_path` is an RFC 6901 JSON pointer into the ordered upstream **inputs array**, selecting `/<input-index>/message` or `/<input-index>/data[/...]`. For example, `/0/data/findings` posts a structured string field, and `/1/message` posts the second upstream human-readable message. Escapes `~1` and `~0` select keys containing `/` and `~`. Content must resolve to nonblank text; missing paths, objects, arrays, nulls, and other non-string bodies fail before GitHub calls. A data schema is optional for comments; control-flow routing still requires validated data. Text is sent literally without template, expression, or shell evaluation. Unknown configuration fields, invalid repository identities and nonpositive/noninteger numbers fail validation.
+
+Each posted body ends with a hidden `gitweave-comment` marker derived from the Run ID, declared node ID, and runtime `instance_id`. Before every post, the action scans all comment pages for that exact invocation marker. A retry after a successful post with a lost or malformed response returns the existing comment's ID and URL instead of posting again. A later loop invocation of the same node has a different marker and can post a new comment. Reconciliation never edits or deletes comments, including human comments. Keep the marker intact for retry recognition; this is lookup-based reconciliation, not a GitHub atomic idempotency API or a crash-resume facility. Actions remain serialized within a Run.
+
+Successful results expose `data.id`, `data.url`, `data.repository`, and `data.number`. Failures and successful retry results retain the normal attempt commits/notes. All requests use the runtime's native `gh` authentication; credentials are not included in node context or results. See [review-comment.json](../examples/review-comment.json) for a review-to-comment graph; change the action to `comment_issue` for an investigation-to-Issue workflow.
+
 ## Existing Pull Request input
 
 ```sh
@@ -105,7 +128,7 @@ Cross-repository (fork) and deleted-repository heads may be read as inputs when 
 
 GitHub PR metadata and Git branch updates are separate operations: the lease atomically protects the head SHA, but cannot lock PR closure/retargeting. Metadata changes observed before or after synchronization stop the Run; a post-push failure may mean the exact artifact was already pushed. Merge's SHA precondition protects its head; base retargeting is checked before the request, not atomically locked by GitHub's merge API. No automatic rollback overwrites a concurrent actor's changes. Start a new Run to adopt a changed PR. Retry state is in-process; v0 still has no crash-resume command.
 
-The example graph reviews structured `{approved, findings}` output, passes concrete findings to Fix, synchronizes its checkpoint, and reviews again until approved. Its `max_steps: 30` includes control steps and bounds the loop; exhaustion or invalid output fails without merging. It uses at most one additional retry per invocation. A clean first review merges without a push. Review nodes are instructed to leave files unchanged; merge's tree check catches unpublished review edits. The example's approval is a graph decision, distinct from runtime completion and GitHub policy. It neither posts comments nor implements Issue #9 comment actions.
+The review-fix-merge example graph reviews structured `{approved, findings}` output, passes concrete findings to Fix, synchronizes its checkpoint, and reviews again until approved. Its `max_steps: 30` includes control steps and bounds the loop; exhaustion or invalid output fails without merging. It uses at most one additional retry per invocation. A clean first review merges without a push. Review nodes are instructed to leave files unchanged; merge's tree check catches unpublished review edits. The example's approval is a graph decision, distinct from runtime completion and GitHub policy. Comment actions are independent and can be added explicitly when desired.
 
 GitHub credentials stay with runtime-owned System Actions. Agent subprocesses receive an environment allowlist that excludes `GH_TOKEN`, `GITHUB_TOKEN`, Git configuration overrides and SSH agent sockets. Native agent authentication uses the existing home/config locations. This is authority separation, not an OS security boundary against a malicious agent: worktrees share a Git object store, and native home/config files remain available according to the CLI's sandbox. Use trusted graphs/repositories and appropriate native sandbox policy. GitWeave does not require Docker or disable native permission checks.
 

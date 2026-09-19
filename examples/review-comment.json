@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "retries": 1,
+  "nodes": {
+    "review": {
+      "kind": "agent",
+      "provider": "codex",
+      "workspace_base": 0,
+      "instruction": "Review the supplied artifact against the request. Leave files unchanged. Return concrete findings in your human-readable message. Do not post to GitHub or perform publication, synchronization, approval, or merge."
+    },
+    "comment": {
+      "kind": "action",
+      "action": "comment_pr",
+      "workspace_base": 0,
+      "config": {
+        "repository": "owner/repo",
+        "number": 9,
+        "body_path": "/0/message"
+      }
+    }
+  },
+  "flow": ["review", "comment"]
+}

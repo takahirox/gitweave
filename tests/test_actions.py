@@ -104,3 +104,21 @@ class ActionTests(unittest.TestCase):
         with patch("gitweave.actions.subprocess.run", return_value=Mock(returncode=0, stdout="{}")) as command:
             action.gh("api", "repos/owner/repo")
         self.assertEqual(command.call_args.kwargs["env"]["GH_HOST"], "github.com")
+
+    def test_comments_coexist_with_publication_and_merge(self):
+        self.git.command.return_value = ""
+        self.actions.gh.side_effect = ["[]", "https://example.test/pr"]
+        self.actions.run("pub", self.pub, self.context)
+        known = dict(self.actions.published)
+        for action in ("comment_issue", "comment_pr"):
+            target = {"number": 42}
+            if action == "comment_pr":
+                target["pull_request"] = {}
+            self.actions.gh.side_effect = [json.dumps(target), "[]", json.dumps({"id": 7, "html_url": "comment"})]
+            self.actions.run("comment", {"action": action, "config": {
+                "repository": "other/repository", "number": 42, "body": "Findings"}},
+                dict(self.context, instance_id=action))
+            self.assertEqual(self.actions.published, known)
+        pr = dict(number=1, state="OPEN", headRefOid="a" * 40, url="url", baseRefName="main")
+        self.actions.gh.side_effect = [json.dumps(pr), json.dumps({"merged": True, "sha": "merged"})]
+        self.assertTrue(self.actions.run("merge", self.merge, self.context).data["merged"])
