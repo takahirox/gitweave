@@ -14,6 +14,22 @@ Version 1 uses JSON, with `version: 1`, a `nodes` object and a nonempty `flow` a
 
 Agent nodes specify `provider`, `instruction`, optional `model` and `effort`, and optional `schema` for result data. Built-in providers are `codex` and `claude`; the Python runtime accepts additional adapters through dependency injection. Model and effort are passed to the chosen CLI; unsupported settings fail visibly rather than being silently substituted. Provider defaults apply if omitted.
 
+Native sandbox restrictions are opt-in per node through the optional, provider-specific `sandbox` field. Codex nodes accept exactly `"read-only"`, `"workspace-write"`, or `"danger-full-access"`. If omitted, GitWeave explicitly passes `--sandbox danger-full-access`; omitting the CLI flag could restore a restrictive provider default. This replaces the previous unconditional `--sandbox workspace-write`. To retain that restriction on a node:
+
+```json
+{
+  "kind": "agent",
+  "provider": "codex",
+  "sandbox": "workspace-write",
+  "workspace_base": 0,
+  "instruction": "Implement the requested change"
+}
+```
+
+These modes were verified with installed `codex-cli 0.155.1` using `codex exec --help` on 2026-09-20. Explicit values are passed unchanged using native `--sandbox`, without a combined approval/sandbox bypass flag or approval-policy override. Invalid strings and non-string values (including `null`) fail graph validation. Any `sandbox` field on Claude, custom-provider, or System Action nodes is rejected; no equivalent Claude control is required. Claude's existing native permission invocation remains unchanged.
+
+The dedicated worktree remains the official artifact boundary in every mode: agents must leave final files there and must not modify the original checkout or other worktrees. Sandboxing does not grant publication authority. Native authentication and agent subprocess environment filtering remain unchanged; publishing, pushing, and merging remote branches remain the responsibility of explicit System Actions. A worktree is not an OS security boundary.
+
 The adapter receives a context containing the request, input commits/messages/data, selected workspace-base commit, and any fan-out item. Both agents and actions also receive `instance_id`, the same invocation identity recorded in attempt provenance: stable across retries, distinct across loop iterations and fan-out items. It must return a `Result`; provider-native events, stderr, session IDs, usage and cost fields are preserved when available. No token/cost estimates are invented. The configured model/effort and raw events retain both requested and provider-reported information.
 
 An optional `schema` validates `data`. The supported JSON Schema subset is `type` (object, array, string, integer, number, boolean, null), `properties`, `required`, boolean `additionalProperties`, `items`, `enum`, and `description`. Unknown keywords are rejected. Provider-specific schema restrictions also apply; for portable structured outputs use fully specified objects with `required` and `additionalProperties: false`, as in the examples. Both adapters request an envelope containing a human-readable `message` plus `data`.

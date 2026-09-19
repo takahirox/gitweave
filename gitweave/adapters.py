@@ -6,6 +6,7 @@ import signal
 import subprocess
 import tempfile
 from .model import Failure, Result
+from .graph import validate_sandbox
 
 
 # These overrides carry credentials or redirect repository/configuration/transport
@@ -141,6 +142,11 @@ class CLIAdapter:
         self.provider = provider
 
     def run(self, node, context, workspace, timeout):
+        if self.provider not in ("codex", "claude"):
+            raise Failure("configuration", f"Unsupported CLI provider: {self.provider!r}")
+        if "provider" in node and node["provider"] != self.provider:
+            raise Failure("configuration", "Node provider does not match CLI adapter")
+        validate_sandbox(node, self.provider)
         prompt = ("You are executing a GitWeave node. The assigned working directory is the official "
                   "artifact boundary. Leave final files there. Do not modify the original checkout or "
                   "other worktrees. Do not publish, push, or merge remote branches. Do not reset usage "
@@ -154,7 +160,8 @@ class CLIAdapter:
                 schema = {"type": "object", "properties": {"message": {"type": "string"}, "data": node["schema"]},
                           "required": ["message", "data"], "additionalProperties": False}
             if self.provider == "codex":
-                command = ["codex", "exec", "--json", "--sandbox", "workspace-write", "-C", str(workspace)]
+                command = ["codex", "exec", "--json", "--sandbox",
+                           node.get("sandbox", "danger-full-access"), "-C", str(workspace)]
                 if node.get("effort"):
                     command += ["-c", "model_reasoning_effort=" + json.dumps(node["effort"])]
                 if schema:
