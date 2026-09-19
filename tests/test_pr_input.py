@@ -227,7 +227,7 @@ class CLITests(unittest.TestCase):
             with self.subTest(flags=flags), patch("sys.argv", ["gitweave", "run", "--graph", "graph.json", "--repo", "owner/repo", *flags, "request"]), patch("gitweave.cli.Runtime") as runtime, patch.object(Path, "read_text", return_value="graph"), patch("sys.stdout", new_callable=io.StringIO):
                 runtime.return_value.run.return_value = dict(run_id="run", status="completed", repository="storage", run_ref="ref", notes_ref="notes", outputs=[])
                 self.assertEqual(main(), 0)
-                runtime.assert_called_once_with("graph", "owner/repo", commit, "request", pr=pr)
+                runtime.assert_called_once_with("graph", "owner/repo", commit, "request", pr=pr, provenance_remote=None)
 
     def test_cli_requires_one_input(self):
         for flags in ([], ["--commit", "HEAD", "--pr", "10"]):
@@ -337,6 +337,10 @@ class RepositoryWorkflowTests(unittest.TestCase):
         self.assertEqual(calls, ["review", "fix", "review"])
         self.assertEqual(len(self.merge_calls), 1)
         self.assertTrue(record["outputs"][0]["data"]["merged"])
+        archived = json.loads(git(self.remote, "show", record["run_ref"] + ":run.json"))
+        self.assertEqual(archived, record)
+        final_note = json.loads(git(self.remote, "notes", "--ref=" + record["notes_ref"], "show", record["outputs"][0]["commit"]))
+        self.assertEqual(final_note["result"]["data"]["merge_commit"], "merged")
         remote = git(self.remote, "rev-parse", "topic")
         self.assertEqual(record["pr_remote_sha"], remote)
         self.assertNotEqual(record["outputs"][0]["commit"], remote)
