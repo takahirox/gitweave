@@ -16,6 +16,34 @@ class GraphTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(Failure):
                 validate_graph(dict(self.good(), **change))
 
+    def test_optional_provider_specific_sandbox(self):
+        for provider in ("codex", "claude", "custom"):
+            graph = self.good()
+            graph["nodes"]["a"]["provider"] = provider
+            self.assertNotIn("sandbox", validate_graph(graph)["nodes"]["a"])
+        for mode in ("read-only", "workspace-write", "danger-full-access"):
+            graph = self.good()
+            graph["nodes"]["a"].update(provider="codex", sandbox=mode)
+            self.assertEqual(validate_graph(graph)["nodes"]["a"]["sandbox"], mode)
+
+    def test_invalid_sandbox_configuration(self):
+        for provider in ("codex", "claude", "custom"):
+            for mode in (None, True, False, 1, [], {}, "", "unrestricted", "workspace-write", "danger-full-access", "read-only"):
+                if provider == "codex" and isinstance(mode, str) and mode in (
+                        "read-only", "workspace-write", "danger-full-access"):
+                    continue
+                graph = self.good()
+                graph["nodes"]["a"].update(provider=provider, sandbox=mode)
+                with self.subTest(provider=provider, mode=mode), self.assertRaises(Failure) as raised:
+                    validate_graph(graph)
+                self.assertEqual(raised.exception.kind, "graph")
+                self.assertIn("sandbox", str(raised.exception))
+        graph = self.good()
+        graph["nodes"]["a"] = dict(kind="action", action="sync_pr", workspace_base=0,
+                                    sandbox="workspace-write")
+        with self.assertRaisesRegex(Failure, "sandbox is only supported"):
+            validate_graph(graph)
+
     def test_timeout_omission_and_explicit_positive_values(self):
         validated = validate_graph(self.good())
         self.assertNotIn("timeout", validated)

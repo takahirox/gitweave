@@ -126,6 +126,52 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "timeout")
         self.assertIn("partial", raised.exception.result.raw_stdout)
 
+    def test_sandbox_commands_preserve_boundary_and_credentials(self):
+        parent = {"HOME": "/fake/home", "CODEX_HOME": "/fake/codex",
+                  "OPENAI_API_KEY": "fake-native", "GH_TOKEN": "fake-system-action",
+                  "GITHUB_TOKEN": "fake-github", "SSH_AUTH_SOCK": "/fake/socket",
+                  "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraHeader",
+                  "GIT_CONFIG_VALUE_0": "fake-authority"}
+        for provider, options, expected in [
+                ("codex", {}, "danger-full-access"),
+                *(("codex", {"sandbox": mode}, mode) for mode in
+                  ("read-only", "workspace-write", "danger-full-access")),
+                ("claude", {}, None)]:
+            raw = (Path(__file__).parent / "fixtures" / f"{provider}.jsonl").read_text()
+            with self.subTest(provider=provider, options=options), patch.dict(os.environ, parent, clear=True), \
+                    patch("gitweave.adapters.subprocess.Popen") as popen:
+                popen.return_value.communicate.return_value = (raw, "")
+                popen.return_value.returncode = 0
+                CLIAdapter(provider).run(dict(instruction="work", **options), {}, Path("/fake/worktree"), 10)
+                command = popen.call_args.args[0]
+                if provider == "codex":
+                    self.assertEqual(command, ["codex", "exec", "--json", "--sandbox", expected,
+                                               "-C", "/fake/worktree", "-"])
+                else:
+                    self.assertEqual(command, ["claude", "-p", "--output-format", "stream-json",
+                                               "--verbose", "--permission-mode", "acceptEdits"])
+                self.assertEqual(popen.call_args.kwargs["cwd"], Path("/fake/worktree"))
+                self.assertEqual(popen.call_args.kwargs["env"],
+                                 {key: parent[key] for key in ("HOME", "CODEX_HOME", "OPENAI_API_KEY")})
+                self.assertEqual(dict(os.environ), parent)
+                prompt = popen.return_value.communicate.call_args.args[0]
+                self.assertIn("official artifact boundary", prompt)
+                self.assertIn("Do not publish, push, or merge remote branches", prompt)
+
+    def test_adapter_rejects_unsupported_configuration_before_launch(self):
+        cases = [("codex", {"sandbox": value}) for value in
+                 (None, True, False, 1, [], {}, "", "unrestricted")]
+        cases += [(provider, {"sandbox": value}) for provider in ("claude", "unknown")
+                  for value in (None, "read-only", "workspace-write", "danger-full-access")]
+        cases += [("unknown", {}), ("codex", {"provider": "claude"})]
+        for provider, options in cases:
+            with self.subTest(provider=provider, options=options), \
+                    patch("gitweave.adapters.process") as invoke:
+                with self.assertRaises(Failure) as raised:
+                    CLIAdapter(provider).run(dict(instruction="work", **options), {}, Path("/tmp"), 10)
+                self.assertFalse(raised.exception.retryable)
+                invoke.assert_not_called()
+
     def test_native_limit_variants_do_not_retry(self):
         examples = [
             ("codex", '{"type":"item.completed","item":{"type":"agent_message","text":"limit message"}}\n{"type":"turn.failed","error":{"message":"You have hit your limit"}}'),

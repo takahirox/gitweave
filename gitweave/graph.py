@@ -9,6 +9,14 @@ def require(condition, message):
         raise Failure("graph", message)
 
 
+def validate_sandbox(node, provider):
+    if "sandbox" in node:
+        require(provider == "codex", f"sandbox is unsupported for provider {provider!r}")
+        require(isinstance(node["sandbox"], str) and node["sandbox"] in
+                ("read-only", "workspace-write", "danger-full-access"),
+                "sandbox must be read-only, workspace-write, or danger-full-access")
+
+
 def validate_comment_config(cfg):
     require(isinstance(cfg, dict), "Comment config must be an object")
     require(set(cfg) <= {"repository", "number", "body", "body_path"}, "Unknown comment option")
@@ -40,16 +48,18 @@ def validate_graph(graph):
     for name, node in nodes.items():
         require(isinstance(name, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", name)), "Invalid node ID")
         require(isinstance(node, dict), f"{name}: node must be an object")
-        require(set(node) <= {"kind", "provider", "model", "effort", "instruction", "schema", "workspace_base", "action", "config"}, f"{name}: unknown node field")
+        require(set(node) <= {"kind", "provider", "model", "effort", "sandbox", "instruction", "schema", "workspace_base", "action", "config"}, f"{name}: unknown node field")
         require(node.get("kind") in ("agent", "action"), f"{name}: unknown kind")
         base = node.get("workspace_base")
         require(base == "run" or (type(base) is int and base >= 0), f"{name}: workspace_base must be 'run' or an input index")
         if node["kind"] == "agent":
             require(isinstance(node.get("provider"), str) and bool(node["provider"]), f"{name}: provider required")
+            validate_sandbox(node, node["provider"])
             require(isinstance(node.get("instruction"), str), f"{name}: instruction required")
             for option in ("model", "effort"):
                 require(option not in node or isinstance(node[option], str), f"{name}: {option} must be text")
         else:
+            require("sandbox" not in node, f"{name}: sandbox is only supported on Codex agent nodes")
             require(node.get("action") in ("publish_pr", "sync_pr", "merge_pr", "comment_issue", "comment_pr"), f"{name}: unknown action")
             cfg = node.get("config", {})
             if node["action"] in ("comment_issue", "comment_pr"):

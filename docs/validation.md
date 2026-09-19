@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Issue #11: optional native sandboxing
+
+On 2026-09-20, installed `codex-cli 0.155.1` reported `read-only`, `workspace-write`, and `danger-full-access` as the supported `--sandbox` values in `codex exec --help`. The help lists the combined approval/sandbox bypass as a separate option; GitWeave does not use it.
+
+`python3 -m unittest discover -s tests -v`: all 80 deterministic tests passed. New coverage checks the explicit nonrestrictive Codex default, all three explicit modes, optional configuration for other providers, rejection of unsupported values/types/providers and action-node settings, rejection before CLI launch, unchanged Claude arguments, assigned worktree arguments and instructions, native authentication inheritance, and publication-credential exclusion for every mode. Existing System Action tests verify that runtime-owned credentials remain available separately. `git diff --check` passed. No live agent smoke or remote publication was performed for this change.
+
+## Earlier validation
+
 Validation for Issue #5 / PR #6 on 2026-09-20.
 
 ## Deterministic validation
