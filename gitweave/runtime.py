@@ -140,6 +140,7 @@ class Runtime:
                 raise Failure("graph", f"{name}: workspace_base index outside inputs")
             base = self.base if choice == "run" else inputs[choice]["commit"]
             context = self.context(inputs, item, origin, base)
+            context["instance_id"] = instance
             for attempt in range(1, self.graph.get("retries", 0) + 2):
                 if self.stopped:
                     raise Failure("stopped", "Run stopped before retry")

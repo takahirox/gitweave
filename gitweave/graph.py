@@ -9,6 +9,22 @@ def require(condition, message):
         raise Failure("graph", message)
 
 
+def validate_comment_config(cfg):
+    require(isinstance(cfg, dict), "Comment config must be an object")
+    require(set(cfg) <= {"repository", "number", "body", "body_path"}, "Unknown comment option")
+    repo = cfg.get("repository")
+    require(isinstance(repo, str) and bool(re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repo))
+            and repo.split("/")[1] not in (".", ".."), "Comment repository must be owner/name")
+    require(type(cfg.get("number")) is int and cfg["number"] > 0, "Comment number must be a positive integer")
+    require(("body" in cfg) != ("body_path" in cfg), "Specify exactly one of body or body_path")
+    if "body" in cfg:
+        require(isinstance(cfg["body"], str) and bool(cfg["body"].strip()), "Comment body must be nonblank text")
+    else:
+        path = cfg["body_path"]
+        require(isinstance(path, str) and bool(re.fullmatch(r"/(0|[1-9][0-9]*)/(message|data)(/.*)?", path))
+                and not re.search(r"~(?![01])", path), "body_path must select /<input-index>/message or /<input-index>/data[/...]")
+
+
 def validate_graph(graph):
     require(isinstance(graph, dict), "Graph must be an object")
     require(set(graph) <= {"version", "nodes", "flow", "concurrency", "max_steps", "retries", "timeout"}, "Unknown graph field")
@@ -33,8 +49,13 @@ def validate_graph(graph):
             for option in ("model", "effort"):
                 require(option not in node or isinstance(node[option], str), f"{name}: {option} must be text")
         else:
-            require(node.get("action") in ("publish_pr", "sync_pr", "merge_pr"), f"{name}: unknown action")
+            require(node.get("action") in ("publish_pr", "sync_pr", "merge_pr", "comment_issue", "comment_pr"), f"{name}: unknown action")
             cfg = node.get("config", {})
+            if node["action"] in ("comment_issue", "comment_pr"):
+                validate_comment_config(cfg)
+                if "schema" in node:
+                    check_schema(node["schema"])
+                continue
             require(isinstance(cfg, dict), f"{name}: config must be an object")
             require(set(cfg) <= {"repository", "base", "title", "body", "publish_node"}, f"{name}: unknown action option")
             input_action = node["action"] == "sync_pr" or (node["action"] == "merge_pr" and "publish_node" not in cfg)
