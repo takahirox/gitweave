@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"claude-session"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"done","structured_output":{"message":"done","data":{"ok":true}},"session_id":"claude-session","usage":{"input_tokens":100,"cache_read_input_tokens":80,"cache_creation_input_tokens":5,"output_tokens":20},"total_cost_usd":0.001}

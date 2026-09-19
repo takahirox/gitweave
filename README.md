@@ -113,3 +113,14 @@ Internal node-to-node handoff uses commits and results. Repository-wide actions 
 The long-term goal of GitWeave is to provide a minimal Git-native foundation for building reliable, inspectable AI-agent workflows while reusing the capabilities of existing agents instead of rebuilding them inside the runtime.
 
 See [Issue #1](https://github.com/takahirox/gitweave/issues/1) for the architectural vision and design principles in more detail.
+
+## Run a graph
+
+GitWeave v0 provides a Python CLI with Codex and Claude adapters:
+
+```sh
+python -m pip install .
+gitweave run --graph examples/single.json --repo /path/to/repo --commit HEAD "Implement the request"
+```
+
+See the [runtime guide](docs/runtime.md) for graph syntax, parallel execution, fan-out, review/fix loops, Git records, explicit PR actions, and validation. [The parallel example](examples/parallel.json) combines both providers in one graph.
