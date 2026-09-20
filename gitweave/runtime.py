@@ -47,7 +47,9 @@ class Runtime:
                        "request": request, "graph": graph_text,
                        "graph_digest": hashlib.sha256(graph_text.encode()).hexdigest(),
                        "started_at": now(), "status": "running", "attempts": [], "outputs": []}
-        self.record["provenance_destination"] = destination(self.git, self.record, provenance_remote)
+        self.provenance_remote = provenance_remote
+        self.publication_repositories = set()
+        self.record["provenance_destination"] = None
         self.steps = 0
         self.instances = 0
         self.stopped = False
@@ -173,6 +175,8 @@ class Runtime:
                 self.git.add_worktree(workspace, context["workspace_base"])
                 result = self.adapters[node["provider"]].run(node, context, workspace, self.graph.get("timeout"))
             else:
+                if node["action"] == "publish_pr":
+                    self.publication_repositories.add(node["config"]["repository"])
                 result = self.actions.run(name, node, context)
             if "schema" in node:
                 validate(result.data, node["schema"])
@@ -217,7 +221,11 @@ class Runtime:
         finally:
             self.record.update(ended_at=now(), steps=self.steps, errors=self.errors,
                                notes_ref=self.git.notes, run_ref=f"refs/gitweave/{self.id}/run")
-            self.git.run_record(self.record)
+            self.record["publication_repositories"] = sorted(self.publication_repositories)
+            try:
+                self.record["provenance_destination"] = destination(self.git, self.record, self.provenance_remote)
+            finally:
+                self.git.run_record(self.record)
         if self.record["provenance_destination"] is not None:
             persist(self.git, self.record["provenance_destination"])
         return self.record

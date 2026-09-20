@@ -214,11 +214,15 @@ branches, tags and other Runs are unchanged. Merging or deleting an artifact bra
 does not delete these refs.
 
 Destination selection uses `run --provenance-remote REMOTE_OR_URL` when supplied.
-Otherwise, the single repository named by the input PR and/or `publish_pr` nodes
+Otherwise, selection happens at finalization using the input PR repository and
+the repositories of `publish_pr` invocations that actually started, whether they
+succeeded or failed. Unexecuted nodes do not contribute. One distinct repository
 is used (`https://github.com/OWNER/REPO.git`), falling back to local `origin` when
-there is no such repository. Multiple distinct workflow repositories require the
-explicit override. This keeps existing GitHub workflows durable even when their
-storage has no origin, while allowing named remotes, SSH URLs and local bare
+there is no such repository. Multiple distinct actual repositories require the
+explicit override at finalization; the Run records and refs remain local if this
+selection is ambiguous. Invoked publication repositories are recorded in
+`publication_repositories`. This keeps existing GitHub workflows durable even
+when their storage has no origin, while allowing named remotes, SSH URLs and local bare
 repositories without requiring canonical URL matching. All destinations, including
 direct GitHub HTTPS URLs, use ordinary Git push configuration and credentials.
 Keep credentials in Git helpers rather than URLs, since the selected destination
