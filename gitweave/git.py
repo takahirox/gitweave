@@ -14,7 +14,7 @@ class Git:
         self.run_id = run_id
         self.notes = f"refs/notes/gitweave/{run_id}"
         self.lock = threading.RLock()
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        self.env = dict(os.environ)
         self.env.update(GIT_AUTHOR_NAME="GitWeave", GIT_AUTHOR_EMAIL="gitweave@localhost",
                         GIT_COMMITTER_NAME="GitWeave", GIT_COMMITTER_EMAIL="gitweave@localhost")
         if initialize:
@@ -24,7 +24,7 @@ class Git:
 
     def command(self, *args, cwd=None, input=None, env=None):
         try:
-            result = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args],
+            result = subprocess.run(["git", *args],
                                     cwd=cwd or self.repo, input=input, text=True,
                                     capture_output=True, env=env or self.env, timeout=120)
         except (OSError, subprocess.TimeoutExpired) as exc:

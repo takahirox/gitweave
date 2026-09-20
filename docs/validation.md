@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Issue #27: normal Git configuration and environment
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 103 deterministic tests on Python 3.14.6: 102 passed and the installed-entry-point test was skipped before package installation. After installing the package in a worktree-local virtual environment, all 13 CLI tests passed, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` also passed.
+
+Three focused Git tests verify inherited fake environment values with only the existing provenance identity overrides, actual Git reads of inherited global and environment-injected configuration, execution of a harmless repository-configured `post-checkout` hook, and an unchanged parent environment. Checkpoint coverage verifies final unstaged and untracked files, agent commit ancestry, GitWeave author/committer identity, retained refs and notes, unchanged HEAD, and byte-for-byte preservation of both the worktree index and an inherited `GIT_INDEX_FILE`.
+
+The Git wrapper no longer forces `core.hooksPath=/dev/null` or strips `GIT_*` variables. No replacement restrictions, GH_HOST changes, or credential-helper changes were added. No live agent tests or external publication were performed; existing deterministic persistence tests use disposable local repositories. These results establish implementation validation, not task or PR approval.
+
 ## Issue #23: unchanged Agent Node environment
 
 On 2026-09-20, `python3 -m unittest discover -s tests -v` passed all 92 deterministic tests on Python 3.14.6. Adapter tests launch `/usr/bin/env` with fake parent values and compare the complete inherited environment, covering development settings, native authentication, GitHub credentials, SSH variables, Git repository/configuration overrides, credential helpers, and transport settings. Mocked Codex and Claude launches verify normal inheritance (no `env` argument), unchanged CLI arguments, sandbox modes, and assigned worktree instructions. System Action credential and fixed-host assertions remain intact.
