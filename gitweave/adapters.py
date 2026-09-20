@@ -31,6 +31,8 @@ def process(command, prompt, cwd, timeout):
 
 def normalize(provider, stdout, stderr="", returncode=0, structured=False):
     result = Result(raw_stdout=stdout, raw_stderr=stderr)
+    diagnostics = []
+    failure_event = None
     try:
         events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
         result.native = {"events": events, "returncode": returncode}
@@ -52,6 +54,10 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                             result.usage[key] = result.usage.get(key, 0) + usage[key]
                 elif kind in ("turn.failed", "error"):
                     failed = True
+                    failure_event = event
+                    error = event.get("error", {})
+                    diagnostics.append(error.get("message") if isinstance(error, dict) else error)
+                    diagnostics.append(event.get("message"))
             if structured and not failed:
                 if not result.message:
                     raise ValueError("Required structured result is missing")
@@ -62,12 +68,20 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                 if event.get("type") == "rate_limit_event" and event.get("rate_limit_info", {}).get("status") == "rejected":
                     failed = True
                     limited = True
+                    failure_event = event
                 if event.get("type") == "system":
                     result.session_id = event.get("session_id", result.session_id)
                 if event.get("type") == "result":
                     completed = True
                     failed = failed or event.get("is_error", False) or event.get("subtype") != "success"
                     result.message = event.get("result", "")
+                    if event.get("is_error", False) or event.get("subtype") != "success":
+                        failure_event = event
+                        diagnostics.append(result.message)
+                        errors = event.get("errors", [])
+                        if isinstance(errors, list):
+                            diagnostics.append("\n".join(error for error in errors
+                                                         if isinstance(error, str) and error.strip()))
                     result.session_id = event.get("session_id", result.session_id)
                     usage = event.get("usage", {})
                     result.usage = {k: usage[k] for k in ("input_tokens", "output_tokens") if k in usage}
@@ -81,7 +95,12 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                         envelope = event["structured_output"]
                         result.message, result.data = envelope["message"], envelope["data"]
         if failed or not completed:
-            raise Failure("usage_limit" if limited else "provider", "Agent did not complete successfully",
+            candidates = [*reversed(diagnostics), stderr,
+                          json.dumps(failure_event, ensure_ascii=False) if failure_event else "",
+                          result.message]
+            diagnostic = next((text for text in candidates if isinstance(text, str) and text.strip()),
+                              "Agent did not complete successfully")
+            raise Failure("usage_limit" if limited else "provider", diagnostic,
                           retryable=not limited, result=result)
         if not isinstance(result.message, str):
             raise ValueError("message must be text")
@@ -89,7 +108,9 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
     except Failure:
         raise
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
-        raise Failure("provider" if returncode else "protocol", str(exc),
+        diagnostic = next((text for text in [*reversed(diagnostics), stderr, stdout]
+                           if isinstance(text, str) and text.strip()), str(exc)) if returncode else str(exc)
+        raise Failure("provider" if returncode else "protocol", diagnostic,
                       retryable=bool(returncode), result=result) from exc
 
 

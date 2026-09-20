@@ -37,6 +37,7 @@ class AdapterTests(unittest.TestCase):
                     with self.subTest(provider=provider, raw=raw, code=code), self.assertRaises(Failure) as raised:
                         normalize(provider, raw, stderr=message, returncode=code, structured=True)
                     failure = raised.exception
+                    self.assertEqual(str(failure), message)
                     self.assertEqual(failure.kind, "provider")
                     self.assertTrue(failure.retryable)
                     self.assertEqual(failure.result.raw_stdout, raw)
@@ -57,6 +58,58 @@ class AdapterTests(unittest.TestCase):
             normalize("codex", '{"type":"thread.started"}', stderr="quota")
         self.assertEqual(raised.exception.kind, "provider")
         self.assertTrue(raised.exception.retryable)
+
+    def test_native_failure_diagnostics_take_precedence(self):
+        cases = [
+            ("codex", [{"type": "error", "message": "Reconnecting"},
+                       {"type": "turn.failed", "error": {"message": "Authentication failed"}}],
+             "Authentication failed"),
+            ("codex", [{"type": "error", "message": "Connection refused"},
+                       {"type": "turn.failed", "error": {"message": " "}}], "Connection refused"),
+            ("claude", [{"type": "result", "subtype": "error_during_execution",
+                         "is_error": True, "result": "Execution failed",
+                         "errors": ["Invalid API key", "Please authenticate"]}],
+             "Invalid API key\nPlease authenticate"),
+            ("claude", [{"type": "result", "subtype": "error_during_execution",
+                         "is_error": True, "result": "Permission denied"}], "Permission denied"),
+        ]
+        for provider, events, message in cases:
+            raw = "\n".join(json.dumps(event) for event in events)
+            for code in (0, 1):
+                with self.subTest(provider=provider, events=events, code=code), self.assertRaises(Failure) as raised:
+                    normalize(provider, raw, stderr="less relevant stderr", returncode=code, structured=True)
+                self.assertEqual(str(raised.exception), message)
+                self.assertEqual(raised.exception.result.native, {"events": events, "returncode": code})
+                self.assertEqual(raised.exception.result.raw_stdout, raw)
+                self.assertEqual(raised.exception.result.raw_stderr, "less relevant stderr")
+
+    def test_failure_diagnostic_fallbacks(self):
+        for provider in ("codex", "claude"):
+            for raw, stderr, code, expected in [
+                ("", "Native stderr\nwith details\n", 0, "Native stderr\nwith details\n"),
+                ("not JSON", "Native stderr", 1, "Native stderr"),
+                ("Native stdout", "", 1, "Native stdout"),
+                (json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "Interrupted"}})
+                 if provider == "codex" else json.dumps({"type": "result", "subtype": "success", "result": "Interrupted"}),
+                 "", 1, "Interrupted"),
+                ("", "", 1, "Agent did not complete successfully"),
+                ("", "  \n", 0, "Agent did not complete successfully"),
+            ]:
+                with self.subTest(provider=provider, raw=raw, code=code), self.assertRaises(Failure) as raised:
+                    normalize(provider, raw, stderr=stderr, returncode=code)
+                self.assertEqual(str(raised.exception), expected)
+                self.assertEqual(raised.exception.kind, "provider")
+                self.assertTrue(raised.exception.retryable)
+
+    def test_native_failure_event_without_text_is_exposed(self):
+        for provider, event in [
+            ("codex", {"type": "turn.failed", "error": {"code": "unauthorized"}}),
+            ("claude", {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}),
+        ]:
+            raw = json.dumps(event)
+            with self.subTest(provider=provider), self.assertRaises(Failure) as raised:
+                normalize(provider, raw)
+            self.assertEqual(json.loads(str(raised.exception)), event)
 
     def assert_environment_inherited(self, parent):
         with patch.dict(os.environ, parent, clear=True), tempfile.TemporaryDirectory() as cwd:
