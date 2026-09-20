@@ -124,7 +124,7 @@ class PersistenceTests(unittest.TestCase):
         hook = self.remote / "hooks" / "update"
         hook.write_text('#!/bin/sh\ncase "$1" in refs/notes/*) exit 1;; esac\n')
         hook.chmod(0o755)
-        with self.assertRaisesRegex(Failure, "Provenance push failed"):
+        with self.assertRaisesRegex(Failure, "hook declined"):
             self.run_local()
         run_ref = git(self.repo, "for-each-ref", "--format=%(refname)", "refs/gitweave").splitlines()[-1]
         record = json.loads(git(self.repo, "show", run_ref + ":run.json"))
@@ -150,7 +150,12 @@ class PersistenceTests(unittest.TestCase):
             self.assertEqual(main(), 2)
             self.assertEqual(out.getvalue(), "")
             self.assertIn("Provenance push failed", err.getvalue())
+            self.assertIn(str(self.root / "missing"), err.getvalue())
+            self.assertIn("does not appear to be a git repository", err.getvalue())
         self.assertEqual(json.loads(git(self.repo, "show", run.record["run_ref"] + ":run.json")), run.record)
+        attempt = run.record["attempts"][0]
+        note = json.loads(git(self.repo, "notes", "--ref=" + run.git.notes, "show", attempt["commit"]))
+        self.assertEqual(note["status"], "completed")
 
     def test_failed_run_before_any_attempt_has_no_notes_to_push(self):
         git(self.repo, "remote", "add", "origin", str(self.remote))
@@ -182,15 +187,24 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(destination(storage, record, "git@example.test:repo.git"), "git@example.test:repo.git")
         self.assertEqual(destination(storage, {"input_pr": record["input_pr"]}), "https://github.com/other/repo.git")
 
-    def test_transfer_error_does_not_expose_credentials(self):
+    def test_transfer_error_preserves_git_diagnostic_and_local_refs(self):
         run = self.run_local()
+        retained = self.refs(self.repo, run)
         original = run.git.command
         def command(*args, **kwargs):
             if "push" in args:
-                raise Failure("git", "Authentication failed: secret")
+                raise failure
             return original(*args, **kwargs)
-        with patch.object(run.git, "command", side_effect=command):
-            with self.assertRaises(Failure) as caught:
-                persist(run.git, "origin")
-        self.assertEqual(caught.exception.kind, "persistence")
-        self.assertNotIn("secret", str(caught.exception))
+        for diagnostic in ("fatal: Authentication failed for 'https://example.test/repo.git'",
+                           "ssh: connect to host example.test port 22: Connection refused\n"
+                           "fatal: Could not read from remote repository."):
+            with self.subTest(diagnostic=diagnostic):
+                failure = Failure("git", diagnostic, retryable=True)
+                with patch.object(run.git, "command", side_effect=command):
+                    with self.assertRaises(Failure) as caught:
+                        persist(run.git, "origin")
+                self.assertEqual(caught.exception.kind, "persistence")
+                self.assertFalse(caught.exception.retryable)
+                self.assertTrue(str(caught.exception).endswith("\n" + diagnostic))
+                self.assertIs(caught.exception.__cause__, failure)
+                self.assertEqual(self.refs(self.repo, run), retained)
