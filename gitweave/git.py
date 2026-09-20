@@ -26,7 +26,7 @@ class Git:
         try:
             result = subprocess.run(["git", *args],
                                     cwd=cwd or self.repo, input=input, text=True,
-                                    capture_output=True, env=env or self.env, timeout=120)
+                                    capture_output=True, env=env or self.env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise Failure("git", str(exc), retryable=True) from exc
         if result.returncode:

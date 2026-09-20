@@ -1,4 +1,5 @@
 import json
+import subprocess
 import unittest
 from unittest.mock import Mock, patch
 from gitweave.actions import GitHubActions
@@ -114,6 +115,36 @@ class ActionTests(unittest.TestCase):
             self.actions.run("merge", self.merge, self.context)
         self.assertTrue(self.actions.run("merge", self.merge, self.context).data["merged"])
         self.assertEqual(sum("PUT" in c.args for c in self.actions.gh.call_args_list), 1)
+
+    def test_github_commands_have_no_implicit_timeout(self):
+        action = GitHubActions(self.git, "run")
+        with patch("gitweave.actions.subprocess.run",
+                   return_value=subprocess.CompletedProcess([], 0, " {}\n", "")) as invoke:
+            self.assertEqual(action.gh("api", "repos/owner/repo"), "{}")
+        self.assertNotIn("timeout", invoke.call_args.kwargs)
+        self.assertEqual(invoke.call_args.args, (["gh", "api", "repos/owner/repo"],))
+        self.assertEqual(invoke.call_args.kwargs["cwd"], self.git.repo)
+        self.assertTrue(invoke.call_args.kwargs["text"])
+        self.assertTrue(invoke.call_args.kwargs["capture_output"])
+
+    def test_github_command_failures_preserve_diagnostics(self):
+        action = GitHubActions(self.git, "run")
+        for failure in (OSError("gh unavailable"), subprocess.TimeoutExpired("gh", 7)):
+            with self.subTest(failure=failure), \
+                    patch("gitweave.actions.subprocess.run", side_effect=failure):
+                with self.assertRaises(Failure) as raised:
+                    action.gh("api", "repos/owner/repo")
+                self.assertEqual(raised.exception.kind, "github")
+                self.assertTrue(raised.exception.retryable)
+                self.assertEqual(str(raised.exception), str(failure))
+                self.assertIs(raised.exception.__cause__, failure)
+        with patch("gitweave.actions.subprocess.run",
+                   return_value=subprocess.CompletedProcess([], 1, "", " HTTP 403: forbidden\n")):
+            with self.assertRaises(Failure) as raised:
+                action.gh("api", "repos/owner/repo")
+        self.assertEqual(raised.exception.kind, "github")
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(str(raised.exception), "HTTP 403: forbidden")
 
     def test_github_transport_matches_git_remote_host(self):
         action = GitHubActions(self.git, "run")
