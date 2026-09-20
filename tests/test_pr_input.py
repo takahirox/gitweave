@@ -191,19 +191,27 @@ class InputActionTests(unittest.TestCase):
                                  ("api", "--method", "PUT", "repos/owner/repo/pulls/10/merge",
                                   "-f", "sha=" + HEAD, "-f", "merge_method=merge"))
 
-    def test_merge_success_then_timeout_retry(self):
-        original = self.gh
-        def timeout(*args):
-            if "PUT" in args:
-                self.raw.update(merged=True, state="closed", merge_commit_sha="merged")
-                raise Failure("github", "timeout", retryable=True)
-            return original(*args)
-        self.action.gh.side_effect = timeout
-        with self.assertRaises(Failure): self.action.run("merge", self.merge, self.context)
-        result = self.action.run("merge", self.merge, self.context)
-        self.assertTrue(result.data["merged"])
-        self.assertEqual(result.data["merge_commit"], "merged")
-        self.assertEqual(sum("PUT" in c.args for c in self.action.gh.call_args_list), 1)
+    def test_merge_rejects_non_open_pr(self):
+        for merged in (False, True):
+            with self.subTest(merged=merged):
+                self.raw.update(merged=merged, state="closed", merge_commit_sha="merged" if merged else None)
+                self.action.gh.reset_mock()
+                with self.assertRaisesRegex(Failure, "Input PR is closed") as raised:
+                    self.action.run("merge", self.merge, self.context)
+                self.assertEqual(raised.exception.kind, "publication_conflict")
+                self.action.gh.assert_called_once_with("api", "repos/owner/repo/pulls/10")
+                self.assertFalse(self.mutations)
+
+    def test_merge_returns_transport_failure(self):
+        failure = Failure("github", "timeout", retryable=True)
+        self.action.gh = Mock(side_effect=[json.dumps(self.raw), failure])
+        with self.assertRaises(Failure) as raised:
+            self.action.run("merge", self.merge, self.context)
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(self.action.gh.call_count, 2)
+        self.action.gh.assert_called_with(
+            "api", "--method", "PUT", "repos/owner/repo/pulls/10/merge",
+            "-f", "sha=" + HEAD, "-f", "merge_method=merge")
 
     def test_merge_ignores_unpublished_local_artifact(self):
         self.git.command.side_effect = ["local-tree", "remote-tree"]
