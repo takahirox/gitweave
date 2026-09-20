@@ -360,7 +360,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(calls[1]["workspace_base"], record["attempts"][0]["commit"])
 
     def test_nested_parallel_obeys_global_concurrency_bound(self):
-        import time
+        barrier = threading.Barrier(2)
         count, peak = 0, 0
         lock = threading.Lock()
         def work(n, c, w):
@@ -368,7 +368,7 @@ class RuntimeTests(unittest.TestCase):
             with lock:
                 count += 1
                 peak = max(peak, count)
-            time.sleep(0.03)
+            barrier.wait(timeout=5)
             with lock:
                 count -= 1
             return Result()

@@ -21,7 +21,8 @@ class GraphTests(unittest.TestCase):
             graph = self.good()
             graph["nodes"]["a"]["provider"] = provider
             self.assertNotIn("sandbox", validate_graph(graph)["nodes"]["a"])
-        for mode in ("read-only", "workspace-write", "danger-full-access"):
+        for mode in ("read-only", "workspace-write", "danger-full-access",
+                     "future-sandbox", "", "READ-ONLY", " workspace-write "):
             graph = self.good()
             graph["nodes"]["a"].update(provider="codex", sandbox=mode)
             self.assertEqual(validate_graph(graph)["nodes"]["a"]["sandbox"], mode)
@@ -29,8 +30,7 @@ class GraphTests(unittest.TestCase):
     def test_invalid_sandbox_configuration(self):
         for provider in ("codex", "claude", "custom"):
             for mode in (None, True, False, 1, [], {}, "", "unrestricted", "workspace-write", "danger-full-access", "read-only"):
-                if provider == "codex" and isinstance(mode, str) and mode in (
-                        "read-only", "workspace-write", "danger-full-access"):
+                if provider == "codex" and isinstance(mode, str):
                     continue
                 graph = self.good()
                 graph["nodes"]["a"].update(provider=provider, sandbox=mode)
@@ -49,7 +49,8 @@ class GraphTests(unittest.TestCase):
             graph = self.good()
             graph["nodes"]["a"]["provider"] = provider
             self.assertNotIn("permission_mode", validate_graph(graph)["nodes"]["a"])
-        for mode in ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"):
+        for mode in ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan",
+                     "future-permission", "", "default", "AUTO", " auto "):
             with self.subTest(mode=mode):
                 graph = self.good()
                 graph["nodes"]["a"].update(provider="claude", permission_mode=mode)
@@ -57,9 +58,10 @@ class GraphTests(unittest.TestCase):
 
     def test_invalid_permission_mode_configuration(self):
         for provider in ("claude", "codex", "custom"):
-            values = [None, True, False, 1, 1.5, [], {}, "", "default", "AUTO", " auto", "unknown"]
+            values = [None, True, False, 1, 1.5, [], {}]
             if provider != "claude":
-                values += ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"]
+                values += ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan",
+                           "", "default", "AUTO", " auto", "unknown"]
             for value in values:
                 graph = self.good()
                 graph["nodes"]["a"].update(provider=provider, permission_mode=value)

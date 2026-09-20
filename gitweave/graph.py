@@ -12,9 +12,7 @@ def require(condition, message):
 def validate_sandbox(node, provider):
     if "sandbox" in node:
         require(provider == "codex", f"sandbox is unsupported for provider {provider!r}")
-        require(isinstance(node["sandbox"], str) and node["sandbox"] in
-                ("read-only", "workspace-write", "danger-full-access"),
-                "sandbox must be read-only, workspace-write, or danger-full-access")
+        require(isinstance(node["sandbox"], str), "sandbox must be text")
 
 
 def validate_permission_mode(node, provider):
@@ -22,9 +20,7 @@ def validate_permission_mode(node, provider):
         require(node.get("kind", "agent") == "agent",
                 "permission_mode is only supported on Claude agent nodes")
         require(provider == "claude", f"permission_mode is unsupported for provider {provider!r}")
-        require(isinstance(node["permission_mode"], str) and node["permission_mode"] in
-                ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"),
-                "permission_mode must be acceptEdits, auto, bypassPermissions, manual, dontAsk, or plan")
+        require(isinstance(node["permission_mode"], str), "permission_mode must be text")
 
 
 def validate_comment_config(cfg):
