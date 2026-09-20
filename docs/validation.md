@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Finalization-only Run records
+
+On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 141 deterministic tests in 24.508 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+Focused regression coverage verifies that no Run ref exists during execution, earlier successful and failed attempts remain readable through their refs and notes, and successful or exhausted-retry Runs write exactly one final record matching the returned summary. The parallel-failure test verifies that the single final record includes both the failed and completed siblings and their retained notes.
+
+The production change removes only the startup and per-attempt Run-record writes. Finalization and attempt retention remain unchanged. Current runtime documentation explains the finalization-only record and the absence of a final Run record after a hard crash. The diff was reviewed against the supplied issue and development/review guidelines for completeness and minimal scope. No live agents or external publication were invoked; final files remain in the assigned worktree for GitWeave checkpointing. This evidence does not constitute PR approval.
+
 ## Final-worktree checkpointing without Git workflow policy
 
 On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 140 deterministic tests in 29.831 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.

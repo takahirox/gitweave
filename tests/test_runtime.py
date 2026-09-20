@@ -113,6 +113,38 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse((self.repo / "artifact.txt").exists())
         self.assertEqual(len(git(self.repo, "worktree", "list").splitlines()), 1)
 
+    def test_run_record_is_written_only_at_finalization(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                calls = []
+
+                def work(n, c, w):
+                    self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname)",
+                                         f"refs/gitweave/{run.id}/run"), "")
+                    # Earlier attempts are already durable before the Run is finalized.
+                    for attempt in run.record["attempts"]:
+                        ref = (f"refs/gitweave/{run.id}/attempts/"
+                               f"{attempt['instance_id']}/{attempt['attempt']}")
+                        self.assertEqual(git(self.repo, "rev-parse", ref), attempt["commit"])
+                        self.assertEqual(self.note(run, attempt["commit"])["status"], attempt["status"])
+                    calls.append(c)
+                    if len(calls) == 1 or fail:
+                        raise Failure("provider", "transient", retryable=True)
+                    return Result(message="done")
+
+                run = self.runtime({"a": node(), "b": node()}, ["a", "b"], work, retries=1)
+                with patch.object(run.git, "run_record", wraps=run.git.run_record) as write:
+                    record = run.run()
+                write.assert_called_once_with(record)
+                self.assertEqual(record["status"], "failed" if fail else "completed")
+                self.assertEqual(len(record["attempts"]), 2 if fail else 3)
+                stored = json.loads(git(self.repo, "show", record["run_ref"] + ":run.json"))
+                self.assertEqual(stored, record)
+                if fail:
+                    self.assertEqual(stored["failure"]["kind"], "provider")
+                else:
+                    self.assertEqual(stored["outputs"][0]["message"], "done")
+
     def test_timeout_controls_session_and_reaches_subprocess_wait_unchanged(self):
         for provider in ("codex", "claude"):
             raw = (Path(__file__).parent / "fixtures" / f"{provider}.jsonl").read_text()
@@ -386,9 +418,15 @@ class RuntimeTests(unittest.TestCase):
                 raise Failure("provider", "failed")
             return Result(message="done")
         run = self.runtime({"a": node("bad"), "b": node()}, [{"parallel": [["a"], ["b"]]}], work)
-        record = run.run()
+        with patch.object(run.git, "run_record", wraps=run.git.run_record) as write:
+            record = run.run()
+        write.assert_called_once_with(record)
         self.assertEqual(record["status"], "failed")
         self.assertEqual({a["status"] for a in record["attempts"]}, {"failed", "completed"})
+        stored = json.loads(git(self.repo, "show", record["run_ref"] + ":run.json"))
+        self.assertEqual(stored, record)
+        for attempt in stored["attempts"]:
+            self.assertEqual(self.note(run, attempt["commit"])["status"], attempt["status"])
 
     def test_comment_loop_retry_posts_and_retains_diagnostics(self):
         from unittest.mock import Mock
