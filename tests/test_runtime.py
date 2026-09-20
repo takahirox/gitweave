@@ -469,33 +469,68 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual([c["body"] for c in comments], ["Review 1", "Review 1", "Review 2", "Review 2"])
         self.assertEqual(reviews[0]["instance_id"], attempts[0]["instance_id"])
 
-    def test_storage_failure_keeps_workspace(self):
-        from unittest.mock import patch
-        import shutil
-        run = self.runtime({"a": node()}, ["a"], lambda n, c, w: (w / "artifact").write_text("saved") and Result())
-        with patch.object(run.git, "retain", side_effect=Failure("storage", "disk unavailable")):
-            record = run.run()
-        self.assertEqual(record["status"], "failed")
-        entries = git(self.repo, "worktree", "list", "--porcelain").splitlines()
-        paths = [Path(e.removeprefix("worktree ")) for e in entries if e.startswith("worktree ")][1:]
-        self.assertEqual(len(paths), 1)
-        self.assertEqual((paths[0] / "artifact").read_text(), "saved")
-        run.git.remove_worktree(paths[0])
-        shutil.rmtree(paths[0].parent)
+    def test_storage_failure_still_cleans_workspace(self):
+        for operation in ("retain", "empty"):
+            with self.subTest(operation=operation):
+                paths = []
+                def work(n, c, w):
+                    paths.append(w)
+                    (w / "artifact").write_text("saved")
+                    if operation == "empty":
+                        raise Failure("provider", "execution failed")
+                    return Result()
+                run = self.runtime({"a": node()}, ["a"], work)
+                with patch.object(run.git, operation, side_effect=Failure("storage", "disk unavailable")), \
+                     patch.object(run.git, "remove_worktree", wraps=run.git.remove_worktree) as remove:
+                    record = run.run()
+                self.assertEqual(record["status"], "failed")
+                self.assertEqual(record["failure"], {"kind": "storage", "message": "disk unavailable"})
+                remove.assert_called_once_with(paths[0])
+                self.assertFalse(paths[0].parent.exists())
+                self.assertEqual(git(self.repo, "worktree", "list", "--porcelain").count("worktree "), 1)
 
-    def test_cleanup_failure_keeps_registered_worktree(self):
-        from unittest.mock import patch
-        import shutil
-        run = self.runtime({"a": node()}, ["a"], lambda *args: Result())
-        with patch.object(run.git, "remove_worktree", side_effect=Failure("cleanup", "busy")):
-            record = run.run()
-        self.assertEqual(record["status"], "completed")
-        note = self.note(run, record["attempts"][0]["commit"])
-        self.assertEqual(note["cleanup_warning"], "busy")
-        paths = [Path(e.removeprefix("worktree ")) for e in git(self.repo, "worktree", "list", "--porcelain").splitlines() if e.startswith("worktree ")][1:]
-        self.assertTrue(paths[0].exists())
-        run.git.remove_worktree(paths[0])
-        shutil.rmtree(paths[0].parent)
+    def test_cleanup_failure_surfaces_without_rerecording(self):
+        for earlier in (None, "provider", "storage"):
+            with self.subTest(earlier=earlier):
+                paths = []
+                def work(n, c, w):
+                    paths.append(w)
+                    (w / "artifact").write_text("saved")
+                    if earlier == "provider":
+                        raise Failure("provider", "execution failed")
+                    return Result()
+                run = self.runtime({"a": node()}, ["a", "a"], work)
+                try:
+                    with patch.object(run.git, "remove_worktree", side_effect=Failure("cleanup", "busy")) as remove, \
+                         patch.object(run.git, "retain", wraps=run.git.retain) as retain:
+                        if earlier == "storage":
+                            retain.side_effect = Failure("storage", "disk unavailable")
+                        if earlier is None:
+                            record = run.run()
+                        else:
+                            with self.assertLogs(level="WARNING") as logs:
+                                record = run.run()
+                            self.assertIn("Workspace cleanup failed: busy", logs.output[0])
+                    self.assertEqual(record["status"], "failed")
+                    self.assertEqual(record["failure"], {
+                        "kind": earlier or "cleanup",
+                        "message": {None: "busy", "provider": "execution failed",
+                                    "storage": "disk unavailable"}[earlier],
+                    })
+                    remove.assert_called_once_with(paths[0])
+                    retain.assert_called_once()
+                    commit, _, attempt = retain.call_args.args
+                    self.assertNotIn("cleanup_warning", attempt)
+                    if earlier != "storage":
+                        note = self.note(run, commit)
+                        self.assertNotIn("cleanup_warning", note)
+                        self.assertEqual(note["status"], "failed" if earlier == "provider" else "completed")
+                    self.assertEqual((paths[0] / "artifact").read_text(), "saved")
+                    self.assertEqual(git(self.repo, "worktree", "list", "--porcelain").count("worktree "), 2)
+                finally:
+                    if paths:
+                        run.git.remove_worktree(paths[0])
+                        paths[0].parent.rmdir()
 
     def test_control_rejects_unvalidated_data(self):
         run = self.runtime({"a": node()}, ["a", {"if": {"condition": {"path": "/0/data", "equals": True}, "then": [], "else": []}}], lambda *args: Result(data=True))

@@ -97,6 +97,8 @@ git diff BASE_COMMIT OUTPUT_COMMIT
 
 Raw logs can contain repository or prompt content; keep provenance under the same access controls as the repository. Runtime finalization publishes Run refs and notes when a provenance destination is resolved; see durable provenance below. There is no resume-after-process-crash command in v0; retained refs/notes support diagnosis. A hard process/host crash before finalization may leave retained attempt refs/notes and a worktree on disk, but no final Run record. Git storage exhaustion can prevent record writes; those failures are surfaced rather than reported as completed execution.
 
+After attempting to record provenance, GitWeave attempts normal temporary worktree removal even if recording failed. Cleanup failures fail the Run when there is no earlier failure; otherwise the earlier failure stays primary and cleanup diagnostics are logged. Cleanup does not rewrite attempt provenance or add a `cleanup_warning`. Failed removal may leave filesystem/worktree remnants; there is no fallback deletion or intentional retention for diagnosis.
+
 ## Explicit GitHub actions
 
 Git transport operations (`fetch`, `push`, and `ls-remote`), including provenance

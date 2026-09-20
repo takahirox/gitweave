@@ -4,10 +4,11 @@ import copy
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import re
 from pathlib import Path
 import tempfile
-import shutil
+import sys
 import time
 import uuid
 from .actions import GitHubActions
@@ -191,21 +192,19 @@ class Runtime:
                           failure={"kind": error.kind, "message": str(error), "retryable": error.retryable})
         finally:
             record.update(result=result.record(), ended_at=now(), duration_seconds=time.monotonic() - started)
-            # Retain before cleanup: storage failures leave a workspace available to inspect.
-            cleaned = False
-            if "status" in record:
-                self.git.retain(commit, suffix, record)
-                if workspace is not None and workspace.exists():
-                    try:
+            try:
+                if "status" in record:
+                    self.git.retain(commit, suffix, record)
+            finally:
+                primary_error = error or sys.exception()
+                try:
+                    if workspace is not None and workspace.exists():
                         self.git.remove_worktree(workspace)
-                        cleaned = True
-                    except Failure as cleanup:
-                        record["cleanup_warning"] = str(cleanup)
-                        self.git.retain(commit, suffix, record)
-                else:
-                    cleaned = True
-            if cleaned:
-                shutil.rmtree(temp, ignore_errors=True)
+                    temp.rmdir()
+                except Exception as cleanup:
+                    if primary_error is None:
+                        raise
+                    logging.warning("Workspace cleanup failed: %s", cleanup)
         return result, commit, error
 
     async def execute(self):
