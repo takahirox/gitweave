@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Simplified managed PR publication
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 127 deterministic tests in 23.407 seconds: 126 passed and the installed entry-point test was skipped. After installing the package in the assigned worktree's `.venv`, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -p test_cli.py -v` passed all 13 CLI tests, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+All 12 focused action tests passed. Publication coverage verifies a single force push to the managed ref before GitHub lookup, PR creation and editing with the configured metadata, native push and GitHub failures, and an ordinary push on retry after a PR operation fails. Closed or retargeted PR metadata no longer triggers a local publication veto. Existing managed merge checks remain covered, and existing-PR synchronization is unchanged.
+
+The diff was reviewed against the supplied issue and development/review guidelines for completeness and scope. The managed namespace permits a single-ref force update without remote-head reconciliation or retry recognition; the retained publication state serves the existing merge checks. No live agents or external publication were invoked. Final files remain in the assigned worktree for GitWeave checkpointing; this evidence does not constitute PR approval.
+
 ## Existing-PR mutations use native permission decisions
 
 On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 126 deterministic tests in 22.280 seconds: 125 passed and the installed entry-point test was skipped. After installing the package in the assigned worktree's `.venv`, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -p test_cli.py -v` passed all 13 CLI tests, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.

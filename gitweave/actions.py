@@ -159,27 +159,19 @@ class GitHubActions:
             publisher = node_id if node["action"] == "publish_pr" else cfg["publish_node"]
             branch = f"gitweave/{self.run_id}/{publisher}"
             if node["action"] == "publish_pr":
-                prs = json.loads(self.gh("pr", "list", "--repo", repo, "--head", branch,
-                                         "--state", "all", "--json", "number,state,url,baseRefName"))
-                if prs and (prs[0]["state"] != "OPEN" or prs[0]["baseRefName"] != cfg["base"]):
-                    raise Failure("publication_conflict", "Managed PR is closed or has a different base")
                 commit = context["workspace_base"]
                 remote = f"https://github.com/{repo}.git"
                 remote_ref = f"refs/heads/{branch}"
-                current = self.git.command("ls-remote", remote, remote_ref).split()
-                current = current[0] if current else ""
-                expected = self.published.get(publisher, "")
-                if current != commit:
-                    if current != expected:
-                        raise Failure("publication_conflict", "Managed PR branch changed externally")
-                    self.git.command("push",
-                                     f"--force-with-lease={remote_ref}:{expected}", remote, f"{commit}:{remote_ref}")
+                # GitWeave owns this branch; force only the selected managed ref.
+                self.git.command("push", "--force", remote, f"{commit}:{remote_ref}")
                 self.published[publisher] = commit
                 self.publish_bases[publisher] = cfg["base"]
+                prs = json.loads(self.gh("pr", "list", "--repo", repo, "--head", branch,
+                                         "--state", "all", "--json", "number,url"))
                 if prs:
                     pr = prs[0]
                     self.gh("pr", "edit", str(pr["number"]), "--repo", repo,
-                            "--title", cfg["title"], "--body", cfg.get("body", ""))
+                            "--base", cfg["base"], "--title", cfg["title"], "--body", cfg.get("body", ""))
                     url = pr["url"]
                 else:
                     url = self.gh("pr", "create", "--repo", repo, "--head", branch,
