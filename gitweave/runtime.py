@@ -160,7 +160,7 @@ class Runtime:
                 if error is None:
                     return {"node_id": name, "instance_id": instance, "commit": commit,
                             "message": result.message, "data": result.data, "data_validated": "schema" in node}
-                if error.kind == "usage_limit" or not error.retryable or attempt > self.graph.get("retries", 0):
+                if not error.retryable or attempt > self.graph.get("retries", 0):
                     self.errors.append({"kind": error.kind, "message": str(error), "instance_id": instance})
                     self.stopped = True
                     raise error

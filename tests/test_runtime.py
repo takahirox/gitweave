@@ -223,13 +223,37 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(record["failure"]["kind"], "step_limit")
         self.assertLessEqual(record["steps"], 5)
 
-    def test_usage_limit_never_retries(self):
-        def limited(*args):
-            raise Failure("usage_limit", "limit", retryable=False)
-        run = self.runtime({"a": node()}, ["a"], limited, retries=3)
-        record = run.run()
-        self.assertEqual(len(record["attempts"]), 1)
-        self.assertEqual(record["failure"]["kind"], "usage_limit")
+    def test_retryability_flag_controls_retries_regardless_of_kind(self):
+        for retryable in (False, True):
+            with self.subTest(retryable=retryable):
+                def limited(*args):
+                    raise Failure("usage_limit", "limit", retryable=retryable)
+                run = self.runtime({"a": node()}, ["a"], limited, retries=2)
+                record = run.run()
+                self.assertEqual(len(record["attempts"]), 3 if retryable else 1)
+                self.assertEqual(record["failure"]["kind"], "usage_limit")
+
+    def test_provider_failure_text_follows_configured_retries(self):
+        for provider in ("codex", "claude"):
+            success = (Path(__file__).parent / "fixtures" / f"{provider}.jsonl").read_text()
+            for retries, recover in ((0, False), (2, False), (1, True)):
+                with self.subTest(provider=provider, retries=retries, recover=recover):
+                    agent = dict(node(), provider=provider)
+                    run = Runtime(graph({"a": agent}, ["a"], retries=retries), self.repo,
+                                  self.base, "request", adapters={provider: CLIAdapter(provider)})
+                    outputs = [(1, "usage limit reached", "insufficient credits")] * (retries + 1)
+                    if recover:
+                        outputs[-1] = (0, success, "")
+                    with patch("gitweave.adapters.process", side_effect=outputs) as invoke:
+                        record = run.run()
+                    self.assertEqual(record["status"], "completed" if recover else "failed")
+                    self.assertEqual(invoke.call_count, retries + 1)
+                    for attempt in record["attempts"][:1 if recover else retries + 1]:
+                        note = self.note(run, attempt["commit"])
+                        self.assertEqual(note["failure"]["kind"], "provider")
+                        self.assertTrue(note["failure"]["retryable"])
+                        self.assertEqual(note["result"]["raw_stdout"], "usage limit reached")
+                        self.assertEqual(note["result"]["raw_stderr"], "insufficient credits")
 
     def test_empty_map_preserves_upstream(self):
         def work(n, c, w):
