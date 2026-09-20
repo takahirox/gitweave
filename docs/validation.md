@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Common Agent prompt simplification
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 112 deterministic tests in 18.744 seconds: 111 passed and the installed-entry-point test was skipped because the package was not installed. `python3 -m gitweave --help` and `git diff --check` passed.
+
+Mocked Codex and Claude invocations verify the complete prompt contains only node/worktree context, the declared instruction, and serialized execution inputs. Coverage includes multiline instructions, Unicode input, and an explicit graph-authored publication restriction preserved unchanged. Existing sandbox, permission-mode, environment, schema, and failure-handling tests pass.
+
+The production change only removes behavioral directives from the shared prompt; no replacement policy or configuration was introduced. Current runtime documentation now assigns task-specific instructions to graph authors. The diff was reviewed against the supplied issue and development/review guidelines. No live agents or external publication were invoked. Files remain in the assigned worktree for GitWeave checkpointing; this validation does not constitute PR approval.
+
 ## Issue #29: no default Git or GitHub command timeout
 
 On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 111 deterministic tests on Python 3.14.6 in 18.093 seconds: 110 passed and the installed-entry-point test was skipped because the package was not installed. `python3 -m gitweave --help` and `git diff --check` passed.
