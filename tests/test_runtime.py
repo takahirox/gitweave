@@ -47,6 +47,50 @@ class RuntimeTests(unittest.TestCase):
     def note(self, run, commit):
         return json.loads(git(self.repo, "notes", f"--ref={run.git.notes}", "show", commit))
 
+    def test_node_requirements_are_checked_only_on_selected_branch(self):
+        cases = [
+            (dict(node(), provider="missing"), "graph", "Provider is not registered: missing"),
+        ]
+        for action in ("sync_pr", "merge_pr"):
+            for config in ({}, {"config": {}}):
+                cases.append((dict(kind="action", action=action, workspace_base=0, **config),
+                              "pr_input", "This action requires an existing-PR Run input"))
+        for optional, kind, message in cases:
+            for selected in (False, True):
+                with self.subTest(optional=optional, selected=selected):
+                    nodes = {"route": node(schema={"type": "boolean"}),
+                             "optional": optional, "after": node()}
+                    flow = ["route", {"if": {"condition": {"path": "/0/data", "equals": True},
+                                             "then": ["optional"], "else": []}}, "after"]
+                    work = Mock(return_value=Result(data=selected))
+                    run = self.runtime(nodes, flow, work, retries=2)
+                    with patch.object(run.actions, "gh") as gh:
+                        record = run.run()
+                    gh.assert_not_called()
+                    self.assertEqual(record["status"], "failed" if selected else "completed")
+                    self.assertEqual(work.call_count, 1 if selected else 2)
+                    notes = [self.note(run, attempt["commit"]) for attempt in record["attempts"]]
+                    self.assertEqual([note["node_id"] for note in notes],
+                                     ["route", "optional" if selected else "after"])
+                    if selected:
+                        self.assertEqual(record["failure"], {"kind": kind, "message": message})
+                        self.assertEqual(notes[-1]["failure"],
+                                         {"kind": kind, "message": message, "retryable": False})
+                        self.assertEqual(notes[-1]["status"], "failed")
+                    stored = json.loads(git(self.repo, "show", record["run_ref"] + ":run.json"))
+                    self.assertEqual(stored, record)
+
+    def test_static_errors_in_unselected_branch_still_fail_initialization(self):
+        nodes = {"route": node(schema={"type": "boolean"}),
+                 "invalid": dict(kind="action", action="sync_pr", workspace_base=0,
+                                 config={"repository": "owner/repo"})}
+        flow = ["route", {"if": {"condition": {"path": "/0/data", "equals": True},
+                                 "then": ["invalid"], "else": []}}]
+        work = Mock(return_value=Result(data=False))
+        with self.assertRaisesRegex(Failure, "input PR actions require empty config"):
+            self.runtime(nodes, flow, work)
+        work.assert_not_called()
+
     def test_sequential_artifacts_results_and_run_record(self):
         def work(n, c, w):
             if n["instruction"] == "first":

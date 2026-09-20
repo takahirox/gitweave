@@ -465,9 +465,7 @@ class RepositoryWorkflowTests(unittest.TestCase):
                                      "refs/heads/topic"), self.base if change == "move" else "")
                 self.assertEqual(record["pr_remote_sha"], self.head)
 
-    def test_local_commit_flow_and_missing_pr_action(self):
+    def test_local_commit_flow(self):
         run = Runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), self.remote, self.head, "request", adapters={"codex": Fake(lambda *args: Result())})
         self.assertEqual(run.run()["status"], "completed")
         self.assertIsNone(run.record["input_pr"])
-        with self.assertRaisesRegex(Failure, "require --pr"):
-            Runtime(graph({"sync": self.example["nodes"]["sync"]}, ["sync"]), self.remote, self.head, "request")
