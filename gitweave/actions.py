@@ -53,12 +53,12 @@ class GitHubActions:
                 raise Failure("pr_input", "GitHub returned an invalid commit SHA")
         remote = f"https://github.com/{pr['repository']}.git"
         # Fetch GitHub's PR head, never its synthetic test-merge commit.
-        self.git.command("-c", "credential.helper=!gh auth git-credential", "fetch", "--no-tags",
+        self.git.command("fetch", "--no-tags",
                          remote, f"refs/pull/{number}/head")
         if self.git.resolve("FETCH_HEAD") != pr["head_sha"]:
             raise Failure("publication_conflict", "PR head moved while fetching input")
         self.git.command("update-ref", f"refs/gitweave/{self.run_id}/input/head", pr["head_sha"])
-        self.git.command("-c", "credential.helper=!gh auth git-credential", "fetch", "--no-tags",
+        self.git.command("fetch", "--no-tags",
                          remote, pr["base_sha"])
         if self.git.resolve("FETCH_HEAD") != pr["base_sha"]:
             raise Failure("publication_conflict", "Fetched base does not match input")
@@ -98,7 +98,7 @@ class GitHubActions:
         remote = f"https://github.com/{pr['head_repository']}.git"
         ref = f"refs/heads/{pr['head_branch']}"
         self.git.command("check-ref-format", ref)
-        self.git.command("-c", "credential.helper=!gh auth git-credential", "push",
+        self.git.command("push",
                          f"--force-with-lease={ref}:{expected}", remote, f"{commit}:{ref}")
         self.remote_sha = commit
         return Result(message="Synchronized input PR", data={"url": pr["url"],
@@ -199,13 +199,13 @@ class GitHubActions:
                 commit = context["workspace_base"]
                 remote = f"https://github.com/{repo}.git"
                 remote_ref = f"refs/heads/{branch}"
-                current = self.git.command("-c", "credential.helper=!gh auth git-credential", "ls-remote", remote, remote_ref).split()
+                current = self.git.command("ls-remote", remote, remote_ref).split()
                 current = current[0] if current else ""
                 expected = self.published.get(publisher, "")
                 if current != commit:
                     if current != expected:
                         raise Failure("publication_conflict", "Managed PR branch changed externally")
-                    self.git.command("-c", "credential.helper=!gh auth git-credential", "push",
+                    self.git.command("push",
                                      f"--force-with-lease={remote_ref}:{expected}", remote, f"{commit}:{remote_ref}")
                 self.published[publisher] = commit
                 self.publish_bases[publisher] = cfg["base"]

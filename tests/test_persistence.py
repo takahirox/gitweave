@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from gitweave.cli import main
 from gitweave.git import Git
@@ -172,6 +172,19 @@ class PersistenceTests(unittest.TestCase):
         run = self.run_local(connected=True, work=work)
         self.assertEqual(run.record["status"], "failed")
         self.assertEqual(self.refs(self.remote, run), self.refs(self.repo, run))
+
+    def test_push_uses_normal_git_authentication_for_all_destinations(self):
+        refs = ["refs/gitweave/run/run", "refs/notes/gitweave/run"]
+        for target in ("https://github.com/owner/repo.git", "origin",
+                       "git@github.com:owner/repo.git", str(self.remote)):
+            with self.subTest(target=target):
+                storage = Mock(run_id="run", notes=refs[1])
+                storage.command.side_effect = ["\n".join(refs), ""]
+                persist(storage, target)
+                self.assertEqual([c.args for c in storage.command.call_args_list], [
+                    ("for-each-ref", "--format=%(refname)", "refs/gitweave/run/", refs[1]),
+                    ("push", "--no-follow-tags", "--", target,
+                     *[f"{ref}:{ref}" for ref in refs])])
 
     def test_destination_selection(self):
         storage = Git(self.repo, "selected")

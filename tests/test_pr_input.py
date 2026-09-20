@@ -82,7 +82,7 @@ class InputActionTests(unittest.TestCase):
             ("api", "repos/owner/repo/pulls/10"), ("api", "repos/owner/repo")])
         self.assertEqual([c.args for c in self.git.command.call_args_list], [
             ("check-ref-format", "refs/heads/topic"),
-            ("-c", "credential.helper=!gh auth git-credential", "push",
+            ("push",
              "--force-with-lease=refs/heads/topic:" + HEAD,
              "https://github.com/owner/repo.git", FIX + ":refs/heads/topic")])
         self.assertEqual(self.action.remote_sha, FIX)
@@ -198,8 +198,11 @@ class InputActionTests(unittest.TestCase):
         metadata = self.action.resolve_input("owner/repo", 10)
         self.assertEqual(metadata["base_sha"], BASE)
         calls = [c.args for c in self.git.command.call_args_list]
-        self.assertTrue(any(c[-1] == "refs/pull/10/head" for c in calls))
-        self.assertIn(("update-ref", "refs/gitweave/run/input/base", BASE), calls)
+        self.assertEqual(calls, [
+            ("fetch", "--no-tags", "https://github.com/owner/repo.git", "refs/pull/10/head"),
+            ("update-ref", "refs/gitweave/run/input/head", HEAD),
+            ("fetch", "--no-tags", "https://github.com/owner/repo.git", BASE),
+            ("update-ref", "refs/gitweave/run/input/base", BASE)])
         self.git.resolve.side_effect = [FIX]
         with self.assertRaisesRegex(Failure, "moved while fetching"):
             self.action.resolve_input("owner/repo", 10)
