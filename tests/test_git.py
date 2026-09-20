@@ -7,10 +7,48 @@ import unittest
 from unittest.mock import patch
 
 from gitweave.git import Git
+from gitweave.model import Failure
 
 
 IDENTITY = dict(GIT_AUTHOR_NAME="GitWeave", GIT_AUTHOR_EMAIL="gitweave@localhost",
                 GIT_COMMITTER_NAME="GitWeave", GIT_COMMITTER_EMAIL="gitweave@localhost")
+
+
+class GitInvocationTests(unittest.TestCase):
+    def test_commands_have_no_implicit_timeout(self):
+        with patch("gitweave.git.subprocess.run",
+                   return_value=subprocess.CompletedProcess([], 0, " ok\n", "")) as invoke:
+            git = Git(Path.cwd(), "invocation")
+            environment = {"CUSTOM_SETTING": "test"}
+            self.assertEqual(git.command("hash-object", "--stdin", cwd=Path.cwd(),
+                                         input="artifact", env=environment), "ok")
+        self.assertEqual(invoke.call_count, 2)
+        for invocation in invoke.call_args_list:
+            self.assertNotIn("timeout", invocation.kwargs)
+        invoke.assert_called_with(["git", "hash-object", "--stdin"], cwd=Path.cwd(),
+                                  input="artifact", text=True, capture_output=True,
+                                  env=environment)
+
+    def test_command_failures_preserve_diagnostics(self):
+        with patch("gitweave.git.subprocess.run",
+                   return_value=subprocess.CompletedProcess([], 0, "", "")) as invoke:
+            git = Git(Path.cwd(), "failures")
+            for failure in (OSError("git unavailable"), subprocess.TimeoutExpired("git", 7)):
+                with self.subTest(failure=failure):
+                    invoke.side_effect = failure
+                    with self.assertRaises(Failure) as raised:
+                        git.command("status")
+                    self.assertEqual(raised.exception.kind, "git")
+                    self.assertTrue(raised.exception.retryable)
+                    self.assertEqual(str(raised.exception), str(failure))
+                    self.assertIs(raised.exception.__cause__, failure)
+            invoke.side_effect = None
+            invoke.return_value = subprocess.CompletedProcess([], 1, "", " fatal: command failed\n")
+            with self.assertRaises(Failure) as raised:
+                git.command("status")
+            self.assertEqual(raised.exception.kind, "git")
+            self.assertTrue(raised.exception.retryable)
+            self.assertEqual(str(raised.exception), "fatal: command failed")
 
 
 class GitEnvironmentTests(unittest.TestCase):

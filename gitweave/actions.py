@@ -22,7 +22,7 @@ class GitHubActions:
     def gh(self, *args):
         try:
             reply = subprocess.run(["gh", *args], cwd=self.git.repo, text=True,
-                                   capture_output=True, timeout=120,
+                                   capture_output=True,
                                    env=dict(os.environ, GH_HOST="github.com"))
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise Failure("github", str(exc), retryable=True) from exc

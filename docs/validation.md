@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Issue #29: no default Git or GitHub command timeout
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 111 deterministic tests on Python 3.14.6 in 18.093 seconds: 110 passed and the installed-entry-point test was skipped because the package was not installed. `python3 -m gitweave --help` and `git diff --check` passed.
+
+Four focused mocked invocation tests verify that the Git and `gh` wrappers omit the subprocess timeout argument and preserve command arguments, output handling, launch-error and nonzero-exit diagnostics, failure kinds, and retryability. Injected `TimeoutExpired` exceptions also retain their existing failure conversion. No slow commands or network operations are needed for these tests. Existing Agent Node tests passed for omitted and explicit graph timeouts, process termination, retained diagnostics/provenance, and retry bounds.
+
+The only production changes remove the two fixed 120-second subprocess timeout arguments. No timeout configuration, provider changes, or retry/step policy changes were added. The diff was reviewed against Issue #29 and the development/review guidelines for completeness and scope. No live agents or external publication were invoked; existing persistence tests use disposable local repositories. Files remain in the assigned worktree for GitWeave checkpointing. Validation is implementation evidence, not task or PR approval.
+
 ## Issue #28: optional Claude permission mode
 
 On 2026-09-20, installed Claude Code 2.1.272 reported `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, and `plan` as the supported `--permission-mode` values in `claude --help`. Only help/version inspection was used; no live agent was invoked.
