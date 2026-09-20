@@ -69,9 +69,6 @@ class Git:
         if Path(self.command("rev-parse", "--show-toplevel", cwd=path)).resolve() != Path(path).resolve():
             raise Failure("workspace", "Assigned worktree is no longer valid")
         head = self.command("rev-parse", "HEAD", cwd=path)
-        self.command("merge-base", "--is-ancestor", base, head, cwd=path)
-        if self.command("ls-files", "--unmerged", cwd=path):
-            raise Failure("checkpoint", "Worktree has unresolved index entries; artifact cannot be checkpointed")
         # A private index checkpoints final files without changing the agent's index.
         with tempfile.TemporaryDirectory(prefix="gitweave-index-") as temp:
             env = dict(self.env, GIT_INDEX_FILE=str(Path(temp) / "index"))

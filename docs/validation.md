@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Final-worktree checkpointing without Git workflow policy
+
+On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 140 deterministic tests in 29.831 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+New regression tests first reproduced the ancestry and unresolved-index rejections. They now verify checkpointing from an unrelated final HEAD and an unfinished merge, including conflict markers or unstaged resolutions, deleted and untracked files, preserved HEAD and merge parents, byte-for-byte unchanged Agent index and merge state, and retained artifact refs and original-base provenance. The assigned-worktree-root check remains covered.
+
+The production change only removes the ancestry requirement and unresolved-index rejection; the existing private-index capture and provenance mechanisms remain in place. Current runtime documentation describes the resulting behavior. The diff was reviewed against the supplied issue and development/review guidelines for completeness and minimal scope. No live agents or external publication were invoked; deterministic repository tests use disposable local fixtures. Final files remain in the assigned worktree for GitWeave checkpointing. This evidence does not constitute PR approval.
+
 ## Node-specific validation at execution
 
 On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 136 deterministic tests in 25.998 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
