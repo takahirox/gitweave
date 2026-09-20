@@ -131,7 +131,7 @@ class AdapterTests(unittest.TestCase):
                                                "-C", "/fake/worktree", "-"])
                 else:
                     self.assertEqual(command, ["claude", "-p", "--output-format", "stream-json",
-                                               "--verbose", "--permission-mode", "acceptEdits"])
+                                               "--verbose"])
                 self.assertEqual(popen.call_args.kwargs["cwd"], Path("/fake/worktree"))
                 self.assertNotIn("env", popen.call_args.kwargs)
                 self.assertEqual(dict(os.environ), parent)
@@ -148,6 +148,39 @@ class AdapterTests(unittest.TestCase):
         for provider, options in cases:
             with self.subTest(provider=provider, options=options), \
                     patch("gitweave.adapters.process") as invoke:
+                with self.assertRaises(Failure) as raised:
+                    CLIAdapter(provider).run(dict(instruction="work", **options), {}, Path("/tmp"), 10)
+                self.assertFalse(raised.exception.retryable)
+                invoke.assert_not_called()
+
+    def test_claude_permission_modes_pass_through_with_native_options(self):
+        import json
+        raw = (Path(__file__).parent / "fixtures" / "claude.jsonl").read_text()
+        for mode in (None, "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"):
+            options = {} if mode is None else {"permission_mode": mode}
+            schema = {"type": "object"}
+            envelope = {"type": "object", "properties": {"message": {"type": "string"}, "data": schema},
+                        "required": ["message", "data"], "additionalProperties": False}
+            with self.subTest(mode=mode), patch("gitweave.adapters.process", return_value=(0, raw, "")) as invoke:
+                result = CLIAdapter("claude").run(
+                    dict(kind="agent", provider="claude", instruction="work", model="chosen",
+                         effort="high", schema=schema, **options), {}, Path("/fake/worktree"), 10)
+                expected = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+                if mode is not None:
+                    expected += ["--permission-mode", mode]
+                expected += ["--effort", "high", "--json-schema", json.dumps(envelope), "--model", "chosen"]
+                self.assertEqual(invoke.call_args.args[0], expected)
+                self.assertEqual(invoke.call_args.args[2:], (Path("/fake/worktree"), 10))
+                self.assertEqual(result.data, {"ok": True})
+
+    def test_invalid_permission_modes_fail_before_launch(self):
+        cases = [("claude", {"permission_mode": value}) for value in
+                 (None, True, False, 1, 1.5, [], {}, "", "default", "AUTO", " auto", "unknown")]
+        cases += [(provider, {"permission_mode": value}) for provider in ("codex", "custom")
+                  for value in (None, "auto", "acceptEdits")]
+        cases += [("claude", {"kind": "action", "permission_mode": "auto"})]
+        for provider, options in cases:
+            with self.subTest(provider=provider, options=options), patch("gitweave.adapters.process") as invoke:
                 with self.assertRaises(Failure) as raised:
                     CLIAdapter(provider).run(dict(instruction="work", **options), {}, Path("/tmp"), 10)
                 self.assertFalse(raised.exception.retryable)

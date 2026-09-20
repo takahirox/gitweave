@@ -26,7 +26,23 @@ Native sandbox restrictions are opt-in per node through the optional, provider-s
 }
 ```
 
-These modes were verified with installed `codex-cli 0.155.1` using `codex exec --help` on 2026-09-20. Explicit values are passed unchanged using native `--sandbox`, without a combined approval/sandbox bypass flag or approval-policy override. Invalid strings and non-string values (including `null`) fail graph validation. Any `sandbox` field on Claude, custom-provider, or System Action nodes is rejected; no equivalent Claude control is required. Claude's existing native permission invocation remains unchanged.
+These modes were verified with installed `codex-cli 0.155.1` using `codex exec --help` on 2026-09-20. Explicit values are passed unchanged using native `--sandbox`, without a combined approval/sandbox bypass flag or approval-policy override. Invalid strings and non-string values (including `null`) fail graph validation. Any `sandbox` field on Claude, custom-provider, or System Action nodes is rejected. Codex sandbox and approval behavior is independent of Claude permission configuration.
+
+Claude agent nodes accept an optional `permission_mode` field. When omitted, GitWeave omits `--permission-mode` entirely and defers to Claude's native settings and normal permission behavior. Omission does **not** force `auto`. This replaces the previous unconditional `--permission-mode acceptEdits`. To retain that explicit mode on a node:
+
+```json
+{
+  "kind": "agent",
+  "provider": "claude",
+  "permission_mode": "acceptEdits",
+  "workspace_base": 0,
+  "instruction": "Implement the requested change"
+}
+```
+
+Supported values are exactly `"acceptEdits"`, `"auto"`, `"bypassPermissions"`, `"manual"`, `"dontAsk"`, and `"plan"`, as reported by installed Claude Code 2.1.272 (`claude --help`) on 2026-09-20. Explicit values pass unchanged as `--permission-mode <value>`. Invalid strings and non-string values (including `null`) fail validation; any `permission_mode` field on Codex, custom-provider, or System Action nodes is rejected.
+
+GitWeave continues to use Claude's non-interactive `-p` invocation without changing native settings, permission prompts, or other permission controls. Mode availability and execution remain subject to the installed CLI and native configuration; GitWeave does not substitute another mode or automatically fall back if Claude rejects a mode or denies an operation. There is no shared permission policy across providers.
 
 The dedicated worktree remains the official artifact boundary in every mode: agents must leave final files there and must not modify the original checkout or other worktrees. Sandboxing does not grant publication authority. Agent subprocesses inherit the parent environment unchanged; publishing, pushing, and merging remote branches remain the responsibility of explicit System Actions. A worktree is not an OS security boundary.
 

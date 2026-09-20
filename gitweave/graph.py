@@ -17,6 +17,16 @@ def validate_sandbox(node, provider):
                 "sandbox must be read-only, workspace-write, or danger-full-access")
 
 
+def validate_permission_mode(node, provider):
+    if "permission_mode" in node:
+        require(node.get("kind", "agent") == "agent",
+                "permission_mode is only supported on Claude agent nodes")
+        require(provider == "claude", f"permission_mode is unsupported for provider {provider!r}")
+        require(isinstance(node["permission_mode"], str) and node["permission_mode"] in
+                ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"),
+                "permission_mode must be acceptEdits, auto, bypassPermissions, manual, dontAsk, or plan")
+
+
 def validate_comment_config(cfg):
     require(isinstance(cfg, dict), "Comment config must be an object")
     require(set(cfg) <= {"repository", "number", "body", "body_path"}, "Unknown comment option")
@@ -48,17 +58,19 @@ def validate_graph(graph):
     for name, node in nodes.items():
         require(isinstance(name, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", name)), "Invalid node ID")
         require(isinstance(node, dict), f"{name}: node must be an object")
-        require(set(node) <= {"kind", "provider", "model", "effort", "sandbox", "instruction", "schema", "workspace_base", "action", "config"}, f"{name}: unknown node field")
+        require(set(node) <= {"kind", "provider", "model", "effort", "sandbox", "permission_mode", "instruction", "schema", "workspace_base", "action", "config"}, f"{name}: unknown node field")
         require(node.get("kind") in ("agent", "action"), f"{name}: unknown kind")
         base = node.get("workspace_base")
         require(base == "run" or (type(base) is int and base >= 0), f"{name}: workspace_base must be 'run' or an input index")
         if node["kind"] == "agent":
             require(isinstance(node.get("provider"), str) and bool(node["provider"]), f"{name}: provider required")
             validate_sandbox(node, node["provider"])
+            validate_permission_mode(node, node["provider"])
             require(isinstance(node.get("instruction"), str), f"{name}: instruction required")
             for option in ("model", "effort"):
                 require(option not in node or isinstance(node[option], str), f"{name}: {option} must be text")
         else:
+            require("permission_mode" not in node, f"{name}: permission_mode is only supported on Claude agent nodes")
             require("sandbox" not in node, f"{name}: sandbox is only supported on Codex agent nodes")
             require(node.get("action") in ("publish_pr", "sync_pr", "merge_pr", "comment_issue", "comment_pr"), f"{name}: unknown action")
             cfg = node.get("config", {})
