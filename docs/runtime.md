@@ -14,7 +14,7 @@ Version 1 uses JSON, with `version: 1`, a `nodes` object and a nonempty `flow` a
 
 Agent nodes specify `provider`, `instruction`, optional `model` and `effort`, and optional `schema` for result data. Built-in providers are `codex` and `claude`; the Python runtime accepts additional adapters through dependency injection. Model and effort are passed to the chosen CLI; unsupported settings fail visibly rather than being silently substituted. Provider defaults apply if omitted.
 
-Native sandbox restrictions are opt-in per node through the optional, provider-specific `sandbox` field. Codex nodes accept exactly `"read-only"`, `"workspace-write"`, or `"danger-full-access"`. If omitted, GitWeave explicitly passes `--sandbox danger-full-access`; omitting the CLI flag could restore a restrictive provider default. This replaces the previous unconditional `--sandbox workspace-write`. To retain that restriction on a node:
+Native sandbox restrictions are opt-in per node through the optional, provider-specific `sandbox` field. Codex nodes accept any string; the native CLI determines which values it supports. If omitted, GitWeave explicitly passes `--sandbox danger-full-access`; omitting the CLI flag could restore a restrictive provider default. This replaces the previous unconditional `--sandbox workspace-write`. To retain that restriction on a node:
 
 ```json
 {
@@ -26,7 +26,7 @@ Native sandbox restrictions are opt-in per node through the optional, provider-s
 }
 ```
 
-These modes were verified with installed `codex-cli 0.155.1` using `codex exec --help` on 2026-09-20. Explicit values are passed unchanged using native `--sandbox`, without a combined approval/sandbox bypass flag or approval-policy override. Invalid strings and non-string values (including `null`) fail graph validation. Any `sandbox` field on Claude, custom-provider, or System Action nodes is rejected. Codex sandbox and approval behavior is independent of Claude permission configuration.
+Explicit values are passed unchanged using native `--sandbox`, without a combined approval/sandbox bypass flag or approval-policy override. Only non-string values (including `null`) fail value validation. Any `sandbox` field on Claude, custom-provider, or System Action nodes is rejected. Codex sandbox and approval behavior is independent of Claude permission configuration.
 
 Claude agent nodes accept an optional `permission_mode` field. When omitted, GitWeave omits `--permission-mode` entirely and defers to Claude's native settings and normal permission behavior. Omission does **not** force `auto`. This replaces the previous unconditional `--permission-mode acceptEdits`. To retain that explicit mode on a node:
 
@@ -40,7 +40,9 @@ Claude agent nodes accept an optional `permission_mode` field. When omitted, Git
 }
 ```
 
-Supported values are exactly `"acceptEdits"`, `"auto"`, `"bypassPermissions"`, `"manual"`, `"dontAsk"`, and `"plan"`, as reported by installed Claude Code 2.1.272 (`claude --help`) on 2026-09-20. Explicit values pass unchanged as `--permission-mode <value>`. Invalid strings and non-string values (including `null`) fail validation; any `permission_mode` field on Codex, custom-provider, or System Action nodes is rejected.
+Any string is accepted; Claude determines which values it supports. Explicit values pass unchanged as `--permission-mode <value>`. Non-string values (including `null`) fail validation; any `permission_mode` field on Codex, custom-provider, or System Action nodes is rejected.
+
+GitWeave does not allowlist native option values. Explicit `sandbox` and `permission_mode` strings, including empty strings, are passed without trimming, case normalization, or substitution. The native CLI accepts or rejects them.
 
 GitWeave continues to use Claude's non-interactive `-p` invocation without changing native settings, permission prompts, or other permission controls. Mode availability and execution remain subject to the installed CLI and native configuration; GitWeave does not substitute another mode or automatically fall back if Claude rejects a mode or denies an operation. There is no shared permission policy across providers.
 

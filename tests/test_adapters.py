@@ -136,7 +136,8 @@ class AdapterTests(unittest.TestCase):
         for provider, options, expected in [
                 ("codex", {}, "danger-full-access"),
                 *(("codex", {"sandbox": mode}, mode) for mode in
-                  ("read-only", "workspace-write", "danger-full-access")),
+                  ("read-only", "workspace-write", "danger-full-access",
+                   "future-sandbox", "", "READ-ONLY", " workspace-write ")),
                 ("claude", {}, None)]:
             raw = (Path(__file__).parent / "fixtures" / f"{provider}.jsonl").read_text()
             with self.subTest(provider=provider, options=options), patch.dict(os.environ, parent, clear=True), \
@@ -159,7 +160,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_adapter_rejects_unsupported_configuration_before_launch(self):
         cases = [("codex", {"sandbox": value}) for value in
-                 (None, True, False, 1, [], {}, "", "unrestricted")]
+                 (None, True, False, 1, 1.5, [], {})]
         cases += [(provider, {"sandbox": value}) for provider in ("claude", "unknown")
                   for value in (None, "read-only", "workspace-write", "danger-full-access")]
         cases += [("unknown", {}), ("codex", {"provider": "claude"})]
@@ -174,7 +175,8 @@ class AdapterTests(unittest.TestCase):
     def test_claude_permission_modes_pass_through_with_native_options(self):
         import json
         raw = (Path(__file__).parent / "fixtures" / "claude.jsonl").read_text()
-        for mode in (None, "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"):
+        for mode in (None, "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan",
+                     "future-permission", "", "default", "AUTO", " auto "):
             options = {} if mode is None else {"permission_mode": mode}
             schema = {"type": "object"}
             envelope = {"type": "object", "properties": {"message": {"type": "string"}, "data": schema},
@@ -193,7 +195,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_invalid_permission_modes_fail_before_launch(self):
         cases = [("claude", {"permission_mode": value}) for value in
-                 (None, True, False, 1, 1.5, [], {}, "", "default", "AUTO", " auto", "unknown")]
+                 (None, True, False, 1, 1.5, [], {})]
         cases += [(provider, {"permission_mode": value}) for provider in ("codex", "custom")
                   for value in (None, "auto", "acceptEdits")]
         cases += [("claude", {"kind": "action", "permission_mode": "auto"})]
