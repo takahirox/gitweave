@@ -95,23 +95,11 @@ class GitHubActions:
         self.writable_input()
         commit = context["workspace_base"]
         expected = self.remote_sha
-        if pr["head_sha"] not in (expected, commit):
-            raise Failure("publication_conflict", "PR head changed externally")
         remote = f"https://github.com/{pr['head_repository']}.git"
         ref = f"refs/heads/{pr['head_branch']}"
         self.git.command("check-ref-format", ref)
-        current = self.git.command("-c", "credential.helper=!gh auth git-credential",
-                                   "ls-remote", remote, ref).split()
-        current = current[0] if current else ""
-        if current not in (expected, commit):
-            raise Failure("publication_conflict", "PR branch changed externally")
-        if current != commit:
-            self.git.command("-c", "credential.helper=!gh auth git-credential", "push",
-                             f"--force-with-lease={ref}:{expected}", remote, f"{commit}:{ref}")
-        # A retry recognizes the exact commit if a successful push timed out.
-        after = self.check_input()
-        if after["head_sha"] != commit:
-            raise Failure("publication_conflict", "PR changed during synchronization")
+        self.git.command("-c", "credential.helper=!gh auth git-credential", "push",
+                         f"--force-with-lease={ref}:{expected}", remote, f"{commit}:{ref}")
         self.remote_sha = commit
         return Result(message="Synchronized input PR", data={"url": pr["url"],
                       "branch": pr["head_branch"], "commit": commit})

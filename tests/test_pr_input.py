@@ -38,7 +38,6 @@ class InputActionTests(unittest.TestCase):
         self.action.gh = Mock(side_effect=self.gh)
         self.action.input_pr = self.action.read_pr("owner/repo", 10)
         self.action.remote_sha = HEAD
-        self.remote = HEAD
         self.git.command.side_effect = self.command
         self.sync = {"action": "sync_pr", "config": {}}
         self.merge = {"action": "merge_pr", "config": {}}
@@ -53,12 +52,9 @@ class InputActionTests(unittest.TestCase):
         return json.dumps({"merged": True, "sha": "merged"})
 
     def command(self, *args):
-        if "ls-remote" in args:
-            return self.remote + "\trefs/heads/topic" if self.remote else ""
         if "push" in args:
             self.assertIn("--force-with-lease=refs/heads/topic:" + HEAD, args)
             self.assertEqual(args[-2:], ("https://github.com/owner/repo.git", FIX + ":refs/heads/topic"))
-            self.remote = FIX
             self.raw["head"]["sha"] = FIX
         return "tree"
 
@@ -77,35 +73,50 @@ class InputActionTests(unittest.TestCase):
             ("api", "--method", "PUT", "repos/owner/repo/pulls/10/merge",
              "-f", "sha=" + FIX, "-f", "merge_method=merge")])
 
-    def test_sync_success_then_timeout_retry(self):
-        original = self.command
-        def timeout(*args):
-            result = original(*args)
-            if "push" in args:
-                raise Failure("git", "timeout", retryable=True)
-            return result
-        self.git.command.side_effect = timeout
-        with self.assertRaises(Failure):
-            self.run_sync()
-        self.assertEqual(self.action.remote_sha, HEAD)
+    def test_sync_uses_one_lease_without_remote_or_post_push_checks(self):
+        # A stale API head must not override the known lease or invalidate success.
+        self.raw["head"]["sha"] = "d" * 40
+        self.action.gh.reset_mock()
         self.run_sync()
+        self.assertEqual([c.args for c in self.action.gh.call_args_list], [
+            ("api", "repos/owner/repo/pulls/10"), ("api", "repos/owner/repo")])
+        self.assertEqual([c.args for c in self.git.command.call_args_list], [
+            ("check-ref-format", "refs/heads/topic"),
+            ("-c", "credential.helper=!gh auth git-credential", "push",
+             "--force-with-lease=refs/heads/topic:" + HEAD,
+             "https://github.com/owner/repo.git", FIX + ":refs/heads/topic")])
         self.assertEqual(self.action.remote_sha, FIX)
-        self.assertEqual(sum("push" in c.args for c in self.git.command.call_args_list), 1)
 
-    def test_sync_retry_after_post_push_api_timeout(self):
-        original = self.gh
-        timed_out = False
-        def timeout(*args):
-            nonlocal timed_out
-            if args == ("api", "repos/owner/repo/pulls/10") and self.remote == FIX and not timed_out:
-                timed_out = True
-                raise Failure("github", "timeout", retryable=True)
-            return original(*args)
-        self.action.gh.side_effect = timeout
-        with self.assertRaises(Failure): self.run_sync()
+    def test_sync_failure_preserves_known_head_and_retry_uses_same_lease(self):
+        for diagnostic in ("stale info", "timeout"):
+            with self.subTest(diagnostic=diagnostic):
+                self.setUp()
+                failure = Failure("git", diagnostic, retryable=True)
+                def fail(*args):
+                    if "push" in args:
+                        if diagnostic == "timeout":
+                            self.raw["head"]["sha"] = FIX
+                        raise failure
+                    return ""
+                self.git.command.side_effect = fail
+                for _ in range(2):
+                    with self.assertRaises(Failure) as raised:
+                        self.run_sync()
+                    self.assertIs(raised.exception, failure)
+                    self.assertEqual(self.action.remote_sha, HEAD)
+                pushes = [c.args for c in self.git.command.call_args_list if "push" in c.args]
+                self.assertEqual(len(pushes), 2)
+                for push in pushes:
+                    self.assertIn("--force-with-lease=refs/heads/topic:" + HEAD, push)
+
+    def test_successive_sync_uses_last_successful_head(self):
         self.run_sync()
-        self.assertEqual(self.action.remote_sha, FIX)
-        self.assertEqual(sum("push" in c.args for c in self.git.command.call_args_list), 1)
+        self.git.command.reset_mock(side_effect=True)
+        next_commit = "d" * 40
+        self.action.run("sync", self.sync, {"workspace_base": next_commit})
+        self.assertIn("--force-with-lease=refs/heads/topic:" + FIX,
+                      self.git.command.call_args.args)
+        self.assertEqual(self.action.remote_sha, next_commit)
 
     def test_fork_input_retains_head_repository_without_mutation(self):
         self.raw["head"]["repo"] = {"id": 2, "full_name": "fork/repo"}
@@ -115,13 +126,10 @@ class InputActionTests(unittest.TestCase):
         self.assertEqual(metadata["repository"], "owner/repo")
         self.assertFalse(any("push" in c.args for c in self.git.command.call_args_list))
 
-    def test_remote_and_pr_conflicts_stop_before_push(self):
-        for change in ("head", "remote", "deleted", "closed", "base", "branch", "repository"):
+    def test_pr_identity_and_state_conflicts_stop_before_push(self):
+        for change in ("closed", "base", "branch", "repository"):
             with self.subTest(change=change):
                 self.setUp()
-                if change == "head": self.raw["head"]["sha"] = "external"
-                if change == "remote": self.remote = "external"
-                if change == "deleted": self.remote = ""
                 if change == "closed": self.raw["state"] = "closed"
                 if change == "base": self.raw["base"]["ref"] = "release"
                 if change == "branch": self.raw["head"]["ref"] = "other"
@@ -140,17 +148,6 @@ class InputActionTests(unittest.TestCase):
                         self.action.run("action", action, self.context)
                     self.assertFalse(self.mutations)
                     self.assertFalse(any("push" in c.args for c in self.git.command.call_args_list))
-
-    def test_post_push_retarget_is_detected(self):
-        original = self.command
-        def retarget(*args):
-            result = original(*args)
-            if "push" in args: self.raw["base"]["ref"] = "release"
-            return result
-        self.git.command.side_effect = retarget
-        with self.assertRaisesRegex(Failure, "base branch changed"):
-            self.run_sync()
-        self.assertEqual(self.action.remote_sha, HEAD)
 
     def test_merge_policy_rejection_and_exact_sha(self):
         for response, diagnostic, kind, retryable in (
@@ -257,6 +254,9 @@ class RepositoryWorkflowTests(unittest.TestCase):
         self.remote = self.root / "remote"
         self.remote.mkdir()
         git(self.remote, "init", "-q")
+        # Receive-side maintenance must finish before TemporaryDirectory cleanup,
+        # including after the runtime's final provenance push on a failed sync.
+        git(self.remote, "config", "maintenance.autoDetach", "false")
         git(self.remote, "-c", "user.name=Test", "-c", "user.email=test@localhost", "commit", "--allow-empty", "-qm", "base")
         self.base = git(self.remote, "rev-parse", "HEAD")
         git(self.remote, "branch", "main", self.base)
@@ -273,7 +273,7 @@ class RepositoryWorkflowTests(unittest.TestCase):
         self.example = json.loads((Path(__file__).parent.parent / "examples/review-fix-merge.json").read_text())
         original = Git.command
         def command(instance, *args, **kwargs):
-            if "push" in args and self.before_push:
+            if "push" in args and args[-1].endswith(":refs/heads/topic") and self.before_push:
                 self.before_push()
             args = tuple(str(self.remote) if a == "https://github.com/owner/repo.git" else a for a in args)
             return original(instance, *args, **kwargs)
@@ -366,19 +366,30 @@ class RepositoryWorkflowTests(unittest.TestCase):
         self.assertEqual(record["failure"]["kind"], "result")
         self.assertFalse(self.merge_calls)
 
-    def test_atomic_lease_rejects_race_after_remote_check(self):
-        def race():
-            git(self.remote, "update-ref", "refs/heads/topic", self.base)
-        self.before_push = race
-        def work(n, c, w):
-            (w / "artifact").write_text("fixed")
-            return Result()
-        nodes = {"fix": dict(node(), provider="codex"), "sync": self.example["nodes"]["sync"]}
-        record = self.runtime(graph(nodes, ["fix", "sync"]), work).run()
-        self.assertEqual(record["status"], "failed")
-        self.assertIn("stale info", record["failure"]["message"])
-        self.assertEqual(git(self.remote, "rev-parse", "topic"), self.base)
-        self.assertEqual(record["pr_remote_sha"], self.head)
+    def test_atomic_lease_rejects_move_or_deletion_after_metadata_check(self):
+        for change in ("move", "delete"):
+            with self.subTest(change=change):
+                git(self.remote, "update-ref", "refs/heads/topic", self.head)
+                races = []
+                def race():
+                    races.append(change)
+                    if change == "move":
+                        git(self.remote, "update-ref", "refs/heads/topic", self.base)
+                    else:
+                        git(self.remote, "update-ref", "-d", "refs/heads/topic")
+                self.before_push = race
+                def work(n, c, w):
+                    (w / "artifact").write_text("fixed")
+                    return Result()
+                nodes = {"fix": dict(node(), provider="codex"), "sync": self.example["nodes"]["sync"]}
+                record = self.runtime(graph(nodes, ["fix", "sync"]), work).run()
+                self.assertEqual(record["status"], "failed")
+                self.assertEqual(record["failure"]["kind"], "git")
+                self.assertIn("stale info", record["failure"]["message"])
+                self.assertEqual(races, [change])
+                self.assertEqual(git(self.remote, "for-each-ref", "--format=%(objectname)",
+                                     "refs/heads/topic"), self.base if change == "move" else "")
+                self.assertEqual(record["pr_remote_sha"], self.head)
 
     def test_local_commit_flow_and_missing_pr_action(self):
         run = Runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), self.remote, self.head, "request", adapters={"codex": Fake(lambda *args: Result())})

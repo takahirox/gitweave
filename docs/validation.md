@@ -1,5 +1,17 @@
 # v0 validation evidence
 
+## Issue #38: exact leases for PR synchronization
+
+`sync_pr` now performs one exact leased push using the known remote head and records the new head only when Git succeeds. Focused tests cover the exact command, stale API head metadata, successive updates, unchanged lease/error propagation on retries (including a response lost after the API head advanced), and the existing identity/state/permission checks. Real local Git tests inject both a branch move and deletion after metadata inspection and verify Git rejects the push without changing the competing state or the recorded remote SHA. Managed publication and merge behavior remain unchanged.
+
+The [PR57 CI failure](https://github.com/takahirox/gitweave/actions/runs/35494567885) used Git 2.55.0 and Python 3.14.7. Its lease assertions passed; `TemporaryDirectory.cleanup` failed with `ENOTEMPTY` at `remote/.git`. The fixture permits detached receive-side maintenance from the final provenance push, even after synchronization fails. In [Git 2.55.0's maintenance implementation](https://github.com/git/git/blob/v2.55.0/builtin/gc.c), the default geometric strategy estimates loose-object counts from the `17` hash directory. Two objects there exceed its rounded threshold, so even this small fixture can launch a background repack depending on its object hashes.
+
+A worktree-local Git 2.55.0 build and controlled blobs in that directory reproduced the background repack: Trace2 recorded a push returning at `06:45:16.315935` UTC and its repack exiting at `06:45:16.325073` UTC. This establishes a writer that can outlive the push and race directory cleanup. The CI log does not identify the leftover entry; the exact `ENOTEMPTY` was not reproduced locally. The narrow fixture fix sets `maintenance.autoDetach=false` only in its disposable remote repository, keeping maintenance enabled and synchronous. Cleanup errors remain visible and runtime Git policy is untouched.
+
+On 2026-09-20, the deterministic suite ran 117 tests on Python 3.14.6 with Git 2.48.0: 116 passed, with only the uninstalled CLI entry-point test skipped. All 23 existing-PR tests also passed with Git 2.55.0. Twenty additional runs of the updated real lease test with the controlled blobs passed both race cases; Trace2 confirmed all 40 receive-side maintenance invocations used `--no-detach`. Module CLI help and `git diff --check` passed.
+
+The diff was reviewed against the supplied issue and development/review guidelines. No live agents or external publication were invoked. Temporary diagnostic builds and traces were removed; final files remain in the assigned worktree for GitWeave checkpointing. This evidence is not PR approval.
+
 ## Agent process sessions follow opt-in timeouts
 
 On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 113 tests in 18.193 seconds: 112 passed and the installed-entry-point test was skipped because the package was not installed. `python3 -m gitweave --help` and `git diff --check` passed.
