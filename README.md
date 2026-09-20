@@ -132,3 +132,19 @@ Final Runs automatically push their GitWeave refs and notes to the artifact
 repository or configured origin. Offline Runs can be pushed later with Git;
 native Git fetch restores a selected Run into a fresh repository.
 See [destination selection and native Git fetch/retry](docs/runtime.md#durable-provenance).
+
+## Validate a graph
+
+Check a graph before executing it:
+
+```sh
+gitweave validate --graph examples/single.json
+# Also available through the shared Python CLI:
+python -m gitweave validate --graph examples/single.json
+```
+
+The command checks JSON syntax, graph structure, node references, and supported result schemas. It prints success to stdout and exits with status 0, or prints an input-error diagnostic to stderr and exits with status 2.
+
+Validation needs no target repository, base commit, user request, installed agent CLIs, or agent/GitHub credentials. It creates no Run, invokes no agents or System Actions, accesses no network, and does not modify repository state.
+
+Success means the graph passes static validation. It does not check provider availability, authentication, runtime-dependent input values, or semantic task correctness, and does not guarantee that agent execution or the task outcome will succeed.
