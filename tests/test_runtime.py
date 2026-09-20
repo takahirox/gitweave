@@ -69,7 +69,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse((self.repo / "artifact.txt").exists())
         self.assertEqual(len(git(self.repo, "worktree", "list").splitlines()), 1)
 
-    def test_timeout_reaches_subprocess_wait_unchanged(self):
+    def test_timeout_controls_session_and_reaches_subprocess_wait_unchanged(self):
         for provider in ("codex", "claude"):
             raw = (Path(__file__).parent / "fixtures" / f"{provider}.jsonl").read_text()
             for options in ({}, {"timeout": 1800}, {"timeout": 0.25}):
@@ -80,12 +80,15 @@ class RuntimeTests(unittest.TestCase):
                                   self.base, "request", adapters={provider: CLIAdapter(provider)})
                     child = Mock(returncode=0)
                     child.communicate.return_value = (raw, "")
+                    launch = Mock(return_value=child)
                     with patch("gitweave.adapters.subprocess",
-                               Mock(Popen=Mock(return_value=child), PIPE=subprocess.PIPE,
+                               Mock(Popen=launch, PIPE=subprocess.PIPE,
                                     TimeoutExpired=subprocess.TimeoutExpired)), \
                             patch("gitweave.adapters.os.killpg") as kill:
                         record = run.run()
                     self.assertEqual(record["status"], "completed", record.get("failure"))
+                    launch.assert_called_once()
+                    self.assertIs(launch.call_args.kwargs["start_new_session"], "timeout" in options)
                     child.communicate.assert_called_once()
                     self.assertEqual(child.communicate.call_args.kwargs, {"timeout": options.get("timeout")})
                     kill.assert_not_called()

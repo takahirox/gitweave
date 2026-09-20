@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Agent process sessions follow opt-in timeouts
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 113 tests in 18.193 seconds: 112 passed and the installed-entry-point test was skipped because the package was not installed. `python3 -m gitweave --help` and `git diff --check` passed.
+
+Mocked Codex and Claude launches cover omitted, integer, and fractional timeouts. A local Python subprocess test verifies inherited session and process-group IDs without a timeout and a new session/group with an explicit timeout. Existing timeout tests retain process-group termination, partial output, failure provenance, and retry bounds.
+
+The only production change makes `start_new_session` conditional on a configured timeout. Current runtime documentation describes this behavior. The diff was reviewed against the supplied issue and development/review guidelines for completeness and scope. No live agents or external publication were invoked; persistence tests use disposable local repositories. Files remain in the assigned worktree for GitWeave checkpointing. This evidence does not constitute PR approval.
+
 ## Native option values pass through
 
 On 2026-09-20, after installing the package in a worktree-local virtual environment, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 112 tests on Python 3.14.6 in 18.606 seconds, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.

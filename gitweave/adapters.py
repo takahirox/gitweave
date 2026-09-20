@@ -13,7 +13,7 @@ def process(command, prompt, cwd, timeout):
     try:
         child = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                 start_new_session=True)
+                                 start_new_session=timeout is not None)
     except OSError as exc:
         raise Failure("launch", str(exc), retryable=True) from exc
     try:

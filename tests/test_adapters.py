@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -100,6 +101,17 @@ class AdapterTests(unittest.TestCase):
                 self.assertIn("chosen", command)
                 self.assertNotIn("--dangerously-skip-permissions", command)
                 self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
+
+    @unittest.skipUnless(hasattr(os, "getsid"), "POSIX process sessions required")
+    def test_process_session_is_created_only_with_timeout(self):
+        script = "import os, json; print(json.dumps([os.getpid(), os.getsid(0), os.getpgrp()]))"
+        for timeout in (None, 10):
+            with self.subTest(timeout=timeout), tempfile.TemporaryDirectory() as cwd:
+                code, stdout, stderr = process([sys.executable, "-c", script], "", cwd, timeout)
+                self.assertEqual(code, 0, stderr)
+                pid, session, group = json.loads(stdout)
+                self.assertEqual(session, os.getsid(0) if timeout is None else pid)
+                self.assertEqual(group, os.getpgrp() if timeout is None else pid)
 
     def test_timeout_preserves_partial_output(self):
         import sys
