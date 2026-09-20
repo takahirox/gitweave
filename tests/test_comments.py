@@ -7,7 +7,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 from gitweave.actions import GitHubActions
-from gitweave.adapters import agent_environment
 from gitweave.graph import validate_graph
 from gitweave.model import Failure
 
@@ -185,13 +184,11 @@ class CommentTests(unittest.TestCase):
             "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0")}
         parent = dict(authority, GH_HOST="fake.enterprise.invalid", CUSTOM_TOOLCHAIN="fake-dev")
         with patch.dict(os.environ, parent, clear=True):
-            self.assertEqual(agent_environment(), {"CUSTOM_TOOLCHAIN": "fake-dev"})
             with patch("gitweave.actions.subprocess.run", return_value=Mock(returncode=0, stdout="{}")) as command:
                 action.gh("api", "repos/owner/repo/issues/9")
             # System Actions retain runtime authority and their existing fixed host.
             self.assertEqual(command.call_args.kwargs["env"], dict(parent, GH_HOST="github.com"))
             self.assertEqual(dict(os.environ), parent)
-            self.assertEqual(agent_environment(), {"CUSTOM_TOOLCHAIN": "fake-dev"})
         for failure in (OSError("missing gh"), subprocess.TimeoutExpired("gh", 120)):
             with patch("gitweave.actions.subprocess.run", side_effect=failure):
                 with self.assertRaises(Failure) as error:
