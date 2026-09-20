@@ -44,6 +44,37 @@ class GraphTests(unittest.TestCase):
         with self.assertRaisesRegex(Failure, "sandbox is only supported"):
             validate_graph(graph)
 
+    def test_optional_claude_permission_mode(self):
+        for provider in ("claude", "codex", "custom"):
+            graph = self.good()
+            graph["nodes"]["a"]["provider"] = provider
+            self.assertNotIn("permission_mode", validate_graph(graph)["nodes"]["a"])
+        for mode in ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"):
+            with self.subTest(mode=mode):
+                graph = self.good()
+                graph["nodes"]["a"].update(provider="claude", permission_mode=mode)
+                self.assertEqual(validate_graph(graph)["nodes"]["a"]["permission_mode"], mode)
+
+    def test_invalid_permission_mode_configuration(self):
+        for provider in ("claude", "codex", "custom"):
+            values = [None, True, False, 1, 1.5, [], {}, "", "default", "AUTO", " auto", "unknown"]
+            if provider != "claude":
+                values += ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"]
+            for value in values:
+                graph = self.good()
+                graph["nodes"]["a"].update(provider=provider, permission_mode=value)
+                with self.subTest(provider=provider, value=value), self.assertRaisesRegex(Failure, "permission_mode") as raised:
+                    validate_graph(graph)
+                self.assertEqual(raised.exception.kind, "graph")
+        for action in ("publish_pr", "sync_pr", "merge_pr", "comment_issue", "comment_pr"):
+            for value in (None, "auto"):
+                graph = self.good()
+                graph["nodes"]["a"] = dict(kind="action", action=action, workspace_base=0,
+                                          provider="claude", permission_mode=value)
+                with self.subTest(action=action, value=value), self.assertRaisesRegex(
+                        Failure, "permission_mode is only supported on Claude agent nodes"):
+                    validate_graph(graph)
+
     def test_timeout_omission_and_explicit_positive_values(self):
         validated = validate_graph(self.good())
         self.assertNotIn("timeout", validated)

@@ -1,5 +1,15 @@
 # v0 validation evidence
 
+## Issue #28: optional Claude permission mode
+
+On 2026-09-20, installed Claude Code 2.1.272 reported `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, and `plan` as the supported `--permission-mode` values in `claude --help`. Only help/version inspection was used; no live agent was invoked.
+
+`python3 -m unittest discover -s tests -v` ran 107 deterministic tests on Python 3.14.6: 106 passed and the installed-entry-point test was skipped before package installation. After installing the package in a worktree-local virtual environment, all 13 CLI tests passed, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+Graph tests cover omission without inserting a default, every supported explicit mode, invalid types/values, unsupported providers, and all System Action types. Mocked adapter commands verify omission of the permission flag, unchanged pass-through of every explicit mode alongside model/effort/schema options, and rejection before launch. Existing tests retain Codex sandbox commands, native environment inheritance, and worktree instructions. Native permission settings and prompt controls are untouched; no mode substitution or fallback was added.
+
+The diff was reviewed against Issue #28 and the development/review guidelines for completeness and scope. Files are left for GitWeave checkpointing; no GitHub publication, review, or merge was performed. Existing persistence tests use disposable local repositories. Deterministic validation establishes implementation evidence, not task or PR approval.
+
 ## Issue #27: normal Git configuration and environment
 
 On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 103 deterministic tests on Python 3.14.6: 102 passed and the installed-entry-point test was skipped before package installation. After installing the package in a worktree-local virtual environment, all 13 CLI tests passed, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` also passed.

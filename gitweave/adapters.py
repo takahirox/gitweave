@@ -6,7 +6,7 @@ import signal
 import subprocess
 import tempfile
 from .model import Failure, Result
-from .graph import validate_sandbox
+from .graph import validate_permission_mode, validate_sandbox
 
 
 def process(command, prompt, cwd, timeout):
@@ -113,6 +113,7 @@ class CLIAdapter:
         if "provider" in node and node["provider"] != self.provider:
             raise Failure("configuration", "Node provider does not match CLI adapter")
         validate_sandbox(node, self.provider)
+        validate_permission_mode(node, self.provider)
         prompt = ("You are executing a GitWeave node. The assigned working directory is the official "
                   "artifact boundary. Leave final files there. Do not modify the original checkout or "
                   "other worktrees. Do not publish, push, or merge remote branches. Do not reset usage "
@@ -135,7 +136,9 @@ class CLIAdapter:
                     path.write_text(json.dumps(schema))
                     command += ["--output-schema", str(path)]
             else:
-                command = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"]
+                command = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+                if "permission_mode" in node:
+                    command += ["--permission-mode", node["permission_mode"]]
                 if node.get("effort"):
                     command += ["--effort", node["effort"]]
                 if schema:
