@@ -34,7 +34,6 @@ class InputActionTests(unittest.TestCase):
         self.action = GitHubActions(self.git, "run")
         self.raw = pull()
         self.mutations = []
-        self.writable = True
         self.action.gh = Mock(side_effect=self.gh)
         self.action.input_pr = self.action.read_pr("owner/repo", 10)
         self.action.remote_sha = HEAD
@@ -46,15 +45,14 @@ class InputActionTests(unittest.TestCase):
     def gh(self, *args):
         if args == ("api", "repos/owner/repo/pulls/10"):
             return json.dumps(self.raw)
-        if args == ("api", "repos/owner/repo"):
-            return json.dumps({"id": 1, "permissions": {"push": self.writable}})
+        self.assertIn("PUT", args)
         self.mutations.append(args)
         return json.dumps({"merged": True, "sha": "merged"})
 
     def command(self, *args):
         if "push" in args:
             self.assertIn("--force-with-lease=refs/heads/topic:" + HEAD, args)
-            self.assertEqual(args[-2:], ("https://github.com/owner/repo.git", FIX + ":refs/heads/topic"))
+            self.assertEqual(args[-2:], (f"https://github.com/{self.raw['head']['repo']['full_name']}.git", FIX + ":refs/heads/topic"))
             self.raw["head"]["sha"] = FIX
         return "tree"
 
@@ -79,7 +77,7 @@ class InputActionTests(unittest.TestCase):
         self.action.gh.reset_mock()
         self.run_sync()
         self.assertEqual([c.args for c in self.action.gh.call_args_list], [
-            ("api", "repos/owner/repo/pulls/10"), ("api", "repos/owner/repo")])
+            ("api", "repos/owner/repo/pulls/10")])
         self.assertEqual([c.args for c in self.git.command.call_args_list], [
             ("check-ref-format", "refs/heads/topic"),
             ("push",
@@ -88,7 +86,7 @@ class InputActionTests(unittest.TestCase):
         self.assertEqual(self.action.remote_sha, FIX)
 
     def test_sync_failure_preserves_known_head_and_retry_uses_same_lease(self):
-        for diagnostic in ("stale info", "timeout"):
+        for diagnostic in ("stale info", "timeout", "permission denied"):
             with self.subTest(diagnostic=diagnostic):
                 self.setUp()
                 failure = Failure("git", diagnostic, retryable=True)
@@ -137,20 +135,44 @@ class InputActionTests(unittest.TestCase):
                 with self.assertRaises(Failure): self.run_sync()
                 self.assertFalse(any("push" in c.args for c in self.git.command.call_args_list))
 
-    def test_fork_deleted_repository_and_nonwritable_heads_rejected(self):
-        for head_repo in ({"id": 2, "full_name": "fork/repo"}, None, {"id": 1, "full_name": "owner/repo"}):
-            for action in (self.sync, self.merge):
-                with self.subTest(head_repo=head_repo, action=action):
-                    self.raw["head"]["repo"] = head_repo
-                    self.action.input_pr = self.action.read_pr("owner/repo", 10)
-                    self.writable = False
-                    with self.assertRaises(Failure):
-                        self.action.run("action", action, self.context)
-                    self.assertFalse(self.mutations)
-                    self.assertFalse(any("push" in c.args for c in self.git.command.call_args_list))
+    def test_fork_sync_targets_head_repository_and_exact_ref(self):
+        self.raw["head"]["repo"] = {"id": 2, "full_name": "fork/repo"}
+        self.action.input_pr = self.action.read_pr("owner/repo", 10)
+        self.action.gh.reset_mock()
+        self.assertEqual(self.run_sync().data["commit"], FIX)
+        self.assertEqual(self.git.command.call_args.args, (
+            "push", "--force-with-lease=refs/heads/topic:" + HEAD,
+            "https://github.com/fork/repo.git", FIX + ":refs/heads/topic"))
+        self.action.gh.assert_called_once_with("api", "repos/owner/repo/pulls/10")
+
+    def test_merge_needs_no_head_repository_push_permission(self):
+        for head_repo in ({"id": 2, "full_name": "fork/repo"}, None,
+                          {"id": 1, "full_name": "owner/repo"}):
+            with self.subTest(head_repo=head_repo):
+                self.setUp()
+                self.raw["head"]["repo"] = head_repo
+                self.action.input_pr = self.action.read_pr("owner/repo", 10)
+                self.action.gh.reset_mock()
+                result = self.action.run("merge", self.merge, self.context)
+                self.assertTrue(result.data["merged"])
+                self.assertEqual([c.args for c in self.action.gh.call_args_list], [
+                    ("api", "repos/owner/repo/pulls/10"),
+                    ("api", "--method", "PUT", "repos/owner/repo/pulls/10/merge",
+                     "-f", "sha=" + HEAD, "-f", "merge_method=merge")])
+                self.assertFalse(any("push" in c.args for c in self.git.command.call_args_list))
+
+    def test_sync_requires_identifiable_head_repository(self):
+        self.raw["head"]["repo"] = None
+        self.action.input_pr = self.action.read_pr("owner/repo", 10)
+        with self.assertRaisesRegex(Failure, "cannot identify push target"):
+            self.run_sync()
+        self.git.command.assert_not_called()
+        self.assertFalse(self.mutations)
 
     def test_merge_policy_rejection_and_exact_sha(self):
         for response, diagnostic, kind, retryable in (
+                (Failure("github", "HTTP 403: permission denied", retryable=True),
+                 "HTTP 403: permission denied", "github", True),
                 (json.dumps({"merged": False, "message": "Required checks pending"}),
                  "Required checks pending", "merge_policy", False),
                 (Failure("github", "HTTP 405: Required reviews missing", retryable=True),
@@ -160,12 +182,12 @@ class InputActionTests(unittest.TestCase):
                 (Failure("github", "HTTP 405: Merge commits are not allowed", retryable=True),
                  "HTTP 405: Merge commits are not allowed", "github", True)):
             with self.subTest(diagnostic=diagnostic):
-                self.action.gh = Mock(side_effect=[json.dumps(self.raw), json.dumps({"id": 1, "permissions": {"push": True}}), response])
+                self.action.gh = Mock(side_effect=[json.dumps(self.raw), response])
                 with self.assertRaisesRegex(Failure, diagnostic) as raised:
                     self.action.run("merge", self.merge, self.context)
                 self.assertEqual(raised.exception.kind, kind)
                 self.assertEqual(raised.exception.retryable, retryable)
-                self.assertEqual(self.action.gh.call_count, 3)
+                self.assertEqual(self.action.gh.call_count, 2)
                 self.assertEqual(self.action.gh.call_args.args,
                                  ("api", "--method", "PUT", "repos/owner/repo/pulls/10/merge",
                                   "-f", "sha=" + HEAD, "-f", "merge_method=merge"))
@@ -286,8 +308,6 @@ class RepositoryWorkflowTests(unittest.TestCase):
         patch.object(Path, "cwd", return_value=self.root).start()
 
     def gh(self, *args):
-        if args == ("api", "repos/owner/repo"):
-            return json.dumps({"id": 1, "permissions": {"push": True}})
         if args == ("api", "repos/owner/repo/pulls/10"):
             result = pull(git(self.remote, "rev-parse", "refs/heads/topic"), self.base)
             result.update(merged=self.merged, state="closed" if self.merged else "open", merge_commit_sha="merged" if self.merged else None)

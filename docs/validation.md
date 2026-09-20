@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Existing-PR mutations use native permission decisions
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 126 deterministic tests in 22.280 seconds: 125 passed and the installed entry-point test was skipped. After installing the package in the assigned worktree's `.venv`, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -p test_cli.py -v` passed all 13 CLI tests, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+All 25 focused existing-PR tests passed. Coverage verifies fork synchronization targets the head repository and exact leased ref, merges target the base repository and exact SHA without a push-permission preflight (including fork and deleted-head inputs), synchronization rejects an unavailable push target, and native Git/GitHub permission diagnostics survive. Existing identity, artifact, lease-race, and retry checks remain covered.
+
+The diff was reviewed against the supplied issue and development/review guidelines for completeness and scope. No live agents or external publication were invoked. Final files remain in the assigned worktree for GitWeave checkpointing; this evidence does not constitute PR approval.
+
 ## Ordinary GitHub comment actions
 
 On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 124 deterministic tests in 21.242 seconds: 123 passed and the installed entry-point test was skipped. After installing the package in the assigned worktree's `.venv`, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -p test_cli.py -v` passed all 13 CLI tests, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
