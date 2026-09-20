@@ -81,17 +81,10 @@ class GitHubActions:
             raise Failure("publication_conflict", "Input PR is closed")
         return pr
 
-    def writable_input(self):
-        pr = self.input_pr
-        if pr["head_repository_id"] != pr["repository_id"]:
-            raise Failure("pr_input", "Cross-repository PR heads are read-only; mutation is unsupported")
-        repo = json.loads(self.gh("api", f"repos/{pr['repository']}"))
-        if repo.get("id") != pr["repository_id"] or not repo.get("permissions", {}).get("push"):
-            raise Failure("pr_input", "Input PR repository is not writable")
-
     def sync_input(self, context):
         pr = self.check_input()
-        self.writable_input()
+        if not pr["head_repository"]:
+            raise Failure("pr_input", "Input PR head repository is unavailable; cannot identify push target")
         commit = context["workspace_base"]
         expected = self.remote_sha
         remote = f"https://github.com/{pr['head_repository']}.git"
@@ -165,8 +158,6 @@ class GitHubActions:
                 if pr["head_sha"] != self.remote_sha:
                     raise Failure("publication_conflict", "PR head differs from the known remote artifact")
                 self.check_artifact(context, self.remote_sha)
-                if pr["state"] != "MERGED":
-                    self.writable_input()
                 return self.merge_exact(pr["repository"], pr["number"], self.remote_sha, pr)
             repo = cfg["repository"]
             publisher = node_id if node["action"] == "publish_pr" else cfg["publish_node"]
