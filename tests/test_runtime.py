@@ -290,6 +290,29 @@ class RuntimeTests(unittest.TestCase):
                            ["plan", {"map": {"path": "/0/data", "flow": ["worker"]}}, "join"], work)
         self.assertEqual(len(run.run()["attempts"]), 2)
 
+    def test_parallel_github_comments_overlap(self):
+        barrier = threading.Barrier(2)
+        nodes = {action: dict(kind="action", action=action, workspace_base=0,
+                             config={"repository": "owner/repo", "number": number, "body": "Findings"})
+                 for number, action in enumerate(("comment_issue", "comment_pr"), 1)}
+        run = self.runtime(nodes, [{"parallel": [[name] for name in nodes]}], None, concurrency=2)
+
+        def gh(*args):
+            if "POST" in args:
+                # Both actions must reach the POST before either can complete.
+                barrier.wait(timeout=5)
+                number = int(args[3].split("/")[-2])
+                return json.dumps({"id": number, "html_url": f"comment/{number}"})
+            number = int(args[1].rsplit("/", 1)[1])
+            return json.dumps({"number": number, **({"pull_request": {}} if number == 2 else {})})
+
+        run.actions.gh = Mock(side_effect=gh)
+        with patch("gitweave.runtime.persist"):
+            record = run.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual(sorted(output["data"]["id"] for output in record["outputs"]), [1, 2])
+        self.assertEqual(run.actions.gh.call_count, 4)
+
     def test_system_action_retry_and_result_handoff(self):
         class Actions:
             count = 0

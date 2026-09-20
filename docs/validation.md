@@ -1,5 +1,15 @@
 # v0 validation evidence
 
+## Independent GitHub System Actions
+
+On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 134 deterministic tests in 22.486 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+Barrier-based tests demonstrate overlapping GitHub calls for independent publishers, input-PR synchronization, and Issue/PR comments, including comments scheduled through the Graph's parallel flow. Thread handshakes verify that repeated publication and managed merges wait for the same publisher's publication to finish, and input-PR sync/merge uses the head recorded by the preceding sync. Existing failure, retry, exact-head/base, and comment behavior remains covered.
+
+The Run-wide action lock is removed. Synchronization is limited to each publisher's branch/PR and recorded head/base, and the input PR's known remote head. A brief mutex protects publisher-lock creation only; no Git/GitHub operation runs under it. Current runtime documentation describes these boundaries.
+
+The diff was reviewed against the supplied issue and development/review guidelines for completeness and scope. No live agents or external publication were invoked; repository tests use disposable local fixtures. Final files remain in the assigned worktree for GitWeave checkpointing. This evidence does not constitute PR approval.
+
 ## Single-attempt PR merges
 
 On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 130 deterministic tests in 22.320 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
