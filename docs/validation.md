@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Merge ignores unpublished local artifacts
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 129 deterministic tests in 22.848 seconds: 128 passed and the installed entry-point test was skipped. After installing the package in the assigned worktree's `.venv`, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -p test_cli.py -v` passed all 13 CLI tests, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+All 41 focused action and existing-PR tests passed. New regressions verify that both managed and input PRs merge their known remote head despite a different local artifact tree, without local Git inspection or synchronization. Existing coverage retains head/base checks, GitHub rejection diagnostics, exact-SHA merge requests, synchronization, and already-merged retry behavior. The production change only removes the artifact-tree comparison and its two calls; no replacement workflow policy was added.
+
+The diff was reviewed against the supplied issue and development/review guidelines for completeness and scope. No live agents or external publication were invoked. Final files remain in the assigned worktree for GitWeave checkpointing; this evidence does not constitute PR approval.
+
 ## Simplified managed PR publication
 
 On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 127 deterministic tests in 23.407 seconds: 126 passed and the installed entry-point test was skipped. After installing the package in the assigned worktree's `.venv`, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -p test_cli.py -v` passed all 13 CLI tests, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
