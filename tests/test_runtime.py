@@ -323,7 +323,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(record["status"], "failed")
         self.assertEqual({a["status"] for a in record["attempts"]}, {"failed", "completed"})
 
-    def test_comment_loop_retry_identity_and_diagnostics(self):
+    def test_comment_loop_retry_posts_and_retains_diagnostics(self):
         from unittest.mock import Mock
         comment = dict(kind="action", action="comment_pr", workspace_base=0,
                        config={"repository": "owner/repo", "number": 9, "body_path": "/0/message"})
@@ -332,7 +332,7 @@ class RuntimeTests(unittest.TestCase):
             reviews.append(c)
             return Result(message=f"Review {len(reviews)}")
         def decide(n, c, w):
-            self.assertEqual(c["inputs"][0]["data"]["id"], len(reviews))
+            self.assertEqual(c["inputs"][0]["data"]["id"], len(reviews) * 2)
             return Result(data=len(reviews) < 2)
         run = self.runtime({"review": node("review"), "comment": comment,
                             "decide": node("decide", schema={"type": "boolean"})},
@@ -345,9 +345,9 @@ class RuntimeTests(unittest.TestCase):
             if "POST" in args:
                 comments.append({"id": len(comments) + 1, "html_url": "https://example.test/comment",
                                  "body": args[-1].removeprefix("body=")})
-                raise Failure("github", "Response lost", retryable=True)
-            if "/comments?" in args[-1]:
-                return json.dumps(comments)
+                if len(comments) % 2:
+                    raise Failure("github", "Response lost", retryable=True)
+                return json.dumps(comments[-1])
             return json.dumps({"number": 9, "pull_request": {}})
         run.actions.gh = Mock(side_effect=github)
         record = run.run()
@@ -359,10 +359,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(len({a["instance_id"] for a in comments_attempts}), 2)
         self.assertEqual(comments_attempts[0]["instance_id"], comments_attempts[1]["instance_id"])
         self.assertEqual(comments_attempts[0]["failure"]["message"], "Response lost")
-        self.assertEqual(comments_attempts[1]["result"]["data"]["id"], 1)
-        self.assertEqual(comments_attempts[3]["result"]["data"]["id"], 2)
-        self.assertEqual(len(comments), 2)
-        self.assertNotEqual(comments[0]["body"], comments[1]["body"])
+        self.assertEqual(comments_attempts[1]["result"]["data"]["id"], 2)
+        self.assertEqual(comments_attempts[3]["result"]["data"]["id"], 4)
+        self.assertEqual([c["body"] for c in comments], ["Review 1", "Review 1", "Review 2", "Review 2"])
         self.assertEqual(reviews[0]["instance_id"], attempts[0]["instance_id"])
 
     def test_storage_failure_keeps_workspace(self):

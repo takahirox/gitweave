@@ -1,5 +1,4 @@
 """Explicit GitHub publication, comment and merge operations, separate from agents."""
-import hashlib
 import json
 import os
 import re
@@ -124,17 +123,12 @@ class GitHubActions:
         if actual_tree != self.git.command("rev-parse", f"{expected}^{{tree}}"):
             raise Failure("publication_conflict", "Selected artifact has unpublished changes; synchronize before merge")
 
-    def comment(self, node_id, node, context):
+    def comment(self, node, context):
         cfg = node.get("config", {})
         validate_comment_config(cfg)
         body = cfg["body"] if "body" in cfg else pointer(context.get("inputs", []), cfg["body_path"])
         if not isinstance(body, str) or not body.strip():
             raise Failure("result", "Comment body must be nonblank text")
-        instance = context.get("instance_id")
-        if not isinstance(instance, str) or not instance:
-            raise Failure("action", "Comment actions require runtime instance_id")
-        identity = json.dumps([self.run_id, node_id, instance], separators=(",", ":"))
-        marker = f"<!-- gitweave-comment:{hashlib.sha256(identity.encode()).hexdigest()} -->"
         repo, number = cfg["repository"], cfg["number"]
         endpoint = f"repos/{repo}/issues/{number}"
 
@@ -157,27 +151,13 @@ class GitHubActions:
                 or target["number"] != number
                 or ("pull_request" in target) != (node["action"] == "comment_pr")):
             raise Failure("comment_target", "GitHub target does not match the requested Issue/PR")
-        # Explicit pages avoid concatenated JSON documents from gh --paginate.
-        # Never PATCH a comment: reconciliation only returns this invocation's post.
-        page = 1
-        while True:
-            comments = read(f"{endpoint}/comments?per_page=100&page={page}")
-            if not isinstance(comments, list) or any(not isinstance(c, dict) for c in comments):
-                raise Failure("github", "Invalid GitHub comments page", retryable=True)
-            for comment in comments:
-                text = comment.get("body")
-                if isinstance(text, str) and text.endswith("\n\n" + marker):
-                    return result(comment)
-            if len(comments) < 100:
-                break
-            page += 1
-        return result(read("--method", "POST", endpoint + "/comments", "-f", f"body={body}\n\n{marker}"))
+        return result(read("--method", "POST", endpoint + "/comments", "-f", f"body={body}"))
 
     def run(self, node_id, node, context):
         with self.lock:
             cfg = node.get("config", {})
             if node["action"] in ("comment_issue", "comment_pr"):
-                return self.comment(node_id, node, context)
+                return self.comment(node, context)
             if node["action"] == "sync_pr":
                 return self.sync_input(context)
             if node["action"] == "merge_pr" and "publish_node" not in cfg:
