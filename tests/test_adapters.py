@@ -22,16 +22,41 @@ class AdapterTests(unittest.TestCase):
                 self.assertEqual(result.raw_stdout, raw)
                 self.assertTrue(result.native["events"])
 
-    def test_failure_diagnostics_and_limits(self):
-        for provider, raw in [("codex", '{"type":"turn.failed","error":{"message":"usage limit reached"}}'),
-                              ("claude", '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["rate_limit"]}')]:
+    def test_failure_text_does_not_override_retryability(self):
+        messages = ("usage limit", "usage_limit", "quota", "rate_limit", "rate limit",
+                    "insufficient credits", "out of credits", "hit your limit",
+                    "limit reached", "credit balance is too low", "ordinary failure")
+        for provider in ("codex", "claude"):
+            for message in messages:
+                event = ({"type": "turn.failed", "error": {"message": message}}
+                         if provider == "codex" else
+                         {"type": "result", "subtype": "error_during_execution",
+                          "is_error": True, "errors": [message], "result": message})
+                for raw, code in ((json.dumps(event), 0), (json.dumps(event), 1),
+                                  (message, 1), ("", 1)):
+                    with self.subTest(provider=provider, raw=raw, code=code), self.assertRaises(Failure) as raised:
+                        normalize(provider, raw, stderr=message, returncode=code, structured=True)
+                    failure = raised.exception
+                    self.assertEqual(failure.kind, "provider")
+                    self.assertTrue(failure.retryable)
+                    self.assertEqual(failure.result.raw_stdout, raw)
+                    self.assertEqual(failure.result.raw_stderr, message)
+
+    def test_limit_text_does_not_change_success_or_protocol_errors(self):
+        for provider in ("codex", "claude"):
+            raw = (Path(__file__).parent / "fixtures" / f"{provider}.jsonl").read_text()
+            result = normalize(provider, raw, stderr="usage limit", structured=True)
+            self.assertEqual(result.message, "done")
             with self.assertRaises(Failure) as raised:
-                normalize(provider, raw, returncode=1)
-            self.assertEqual(raised.exception.kind, "usage_limit")
+                normalize(provider, "usage limit", stderr="quota", structured=True)
+            self.assertEqual(raised.exception.kind, "protocol")
             self.assertFalse(raised.exception.retryable)
-            self.assertEqual(raised.exception.result.raw_stdout, raw)
-        with self.assertRaises(Failure):
-            normalize("codex", '{"type":"thread.started"}')
+
+    def test_incomplete_execution_remains_retryable(self):
+        with self.assertRaises(Failure) as raised:
+            normalize("codex", '{"type":"thread.started"}', stderr="quota")
+        self.assertEqual(raised.exception.kind, "provider")
+        self.assertTrue(raised.exception.retryable)
 
     def assert_environment_inherited(self, parent):
         with patch.dict(os.environ, parent, clear=True), tempfile.TemporaryDirectory() as cwd:
@@ -218,16 +243,20 @@ class AdapterTests(unittest.TestCase):
                 self.assertFalse(raised.exception.retryable)
                 invoke.assert_not_called()
 
-    def test_native_limit_variants_do_not_retry(self):
-        examples = [
-            ("codex", '{"type":"item.completed","item":{"type":"agent_message","text":"limit message"}}\n{"type":"turn.failed","error":{"message":"You have hit your limit"}}'),
-            ("claude", '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}'),
-            ("claude", '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Your credit balance is too low"}')]
-        for provider, raw in examples:
-            with self.subTest(provider=provider, raw=raw), self.assertRaises(Failure) as raised:
-                normalize(provider, raw, structured=True)
+    def test_native_limit_rejection_does_not_retry(self):
+        raw = '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}'
+        for code in (0, 1):
+            with self.subTest(code=code), self.assertRaises(Failure) as raised:
+                normalize("claude", raw, returncode=code, structured=True)
             self.assertEqual(raised.exception.kind, "usage_limit")
             self.assertFalse(raised.exception.retryable)
+            self.assertEqual(raised.exception.result.native["events"], [json.loads(raw)])
+
+    def test_native_limit_event_without_rejection_does_not_override_success(self):
+        for status in ("allowed", "allowed_warning", "unknown"):
+            raw = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": status}})
+            raw += '\n' + json.dumps({"type": "result", "subtype": "success", "result": "done"})
+            self.assertEqual(normalize("claude", raw).message, "done")
 
     def test_missing_structured_output_is_not_a_valid_null(self):
         for provider, raw in [("codex", '{"type":"turn.completed","usage":{}}'),

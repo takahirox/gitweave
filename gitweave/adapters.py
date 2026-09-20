@@ -29,18 +29,13 @@ def process(command, prompt, cwd, timeout):
     return child.returncode, stdout, stderr
 
 
-def quota_error(text):
-    text = text.lower()
-    return any(term in text for term in ("usage limit", "usage_limit", "quota", "rate_limit", "rate limit", "insufficient credits", "out of credits", "hit your limit", "limit reached", "credit balance is too low"))
-
-
 def normalize(provider, stdout, stderr="", returncode=0, structured=False):
     result = Result(raw_stdout=stdout, raw_stderr=stderr)
     try:
         events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
         result.native = {"events": events, "returncode": returncode}
         failed = bool(returncode)
-        diagnostics = []
+        limited = False
         completed = False
         if provider == "codex":
             for event in events:
@@ -57,7 +52,6 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                             result.usage[key] = result.usage.get(key, 0) + usage[key]
                 elif kind in ("turn.failed", "error"):
                     failed = True
-                    diagnostics.append(event)
             if structured and not failed:
                 if not result.message:
                     raise ValueError("Required structured result is missing")
@@ -67,14 +61,12 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
             for event in events:
                 if event.get("type") == "rate_limit_event" and event.get("rate_limit_info", {}).get("status") == "rejected":
                     failed = True
-                    diagnostics.append(event)
+                    limited = True
                 if event.get("type") == "system":
                     result.session_id = event.get("session_id", result.session_id)
                 if event.get("type") == "result":
                     completed = True
                     failed = failed or event.get("is_error", False) or event.get("subtype") != "success"
-                    if failed:
-                        diagnostics.append(event)
                     result.message = event.get("result", "")
                     result.session_id = event.get("session_id", result.session_id)
                     usage = event.get("usage", {})
@@ -89,8 +81,6 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                         envelope = event["structured_output"]
                         result.message, result.data = envelope["message"], envelope["data"]
         if failed or not completed:
-            detail = json.dumps(diagnostics) + stderr
-            limited = quota_error(detail)
             raise Failure("usage_limit" if limited else "provider", "Agent did not complete successfully",
                           retryable=not limited, result=result)
         if not isinstance(result.message, str):
@@ -99,8 +89,8 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
     except Failure:
         raise
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
-        limited = quota_error(stderr) or (returncode and quota_error(stdout))
-        raise Failure("usage_limit" if limited else "protocol", str(exc), result=result) from exc
+        raise Failure("provider" if returncode else "protocol", str(exc),
+                      retryable=bool(returncode), result=result) from exc
 
 
 class CLIAdapter:
