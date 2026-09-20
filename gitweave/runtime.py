@@ -13,7 +13,7 @@ import uuid
 from .actions import GitHubActions
 from .adapters import CLIAdapter
 from .git import Git
-from .persistence import Archive, destination
+from .persistence import destination, persist
 from .graph import validate_graph
 from .model import Failure, Result, equal, pointer, validate
 
@@ -224,7 +224,7 @@ class Runtime:
                                notes_ref=self.git.notes, run_ref=f"refs/gitweave/{self.id}/run")
             self.git.run_record(self.record)
         if self.record["provenance_destination"] is not None:
-            Archive(self.git).export()
+            persist(self.git, self.record["provenance_destination"])
         return self.record
 
     def run(self):
