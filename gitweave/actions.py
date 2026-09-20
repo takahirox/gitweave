@@ -107,11 +107,6 @@ class GitHubActions:
         return Result(message="PR merged", data={"merged": True, "url": pr["url"],
                       "merge_commit": reply.get("sha")})
 
-    def check_artifact(self, context, expected):
-        actual_tree = self.git.command("rev-parse", f"{context['workspace_base']}^{{tree}}")
-        if actual_tree != self.git.command("rev-parse", f"{expected}^{{tree}}"):
-            raise Failure("publication_conflict", "Selected artifact has unpublished changes; synchronize before merge")
-
     def comment(self, node, context):
         cfg = node.get("config", {})
         validate_comment_config(cfg)
@@ -153,7 +148,6 @@ class GitHubActions:
                 pr = self.check_input(allow_merged=True)
                 if pr["head_sha"] != self.remote_sha:
                     raise Failure("publication_conflict", "PR head differs from the known remote artifact")
-                self.check_artifact(context, self.remote_sha)
                 return self.merge_exact(pr["repository"], pr["number"], self.remote_sha, pr)
             repo = cfg["repository"]
             publisher = node_id if node["action"] == "publish_pr" else cfg["publish_node"]
@@ -186,6 +180,5 @@ class GitHubActions:
                 raise Failure("publication_conflict", "PR head differs from the published artifact")
             if pr["baseRefName"] != self.publish_bases[publisher]:
                 raise Failure("publication_conflict", "Managed PR base changed")
-            self.check_artifact(context, expected)
             pr["merge_commit"] = (pr.get("mergeCommit") or {}).get("oid")
             return self.merge_exact(repo, pr["number"], expected, pr)

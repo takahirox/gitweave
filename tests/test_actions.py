@@ -86,6 +86,21 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(merge_args, ("api", "--method", "PUT", "repos/owner/repo/pulls/1/merge",
                                      "-f", "sha=" + "a" * 40, "-f", "merge_method=merge"))
 
+    def test_managed_merge_ignores_unpublished_local_artifact(self):
+        self.actions.published["pub"] = "a" * 40
+        self.actions.publish_bases["pub"] = "main"
+        self.git.command.side_effect = ["local-tree", "remote-tree"]
+        pr = dict(number=1, state="OPEN", headRefOid="a" * 40,
+                  url="url", baseRefName="main")
+        self.actions.gh.side_effect = [json.dumps(pr), json.dumps({"merged": True, "sha": "merged"})]
+        result = self.actions.run("merge", self.merge, {"workspace_base": "b" * 40})
+        self.assertEqual(result.data, {"merged": True, "url": "url", "merge_commit": "merged"})
+        self.git.command.assert_not_called()
+        self.actions.gh.assert_called_with(
+            "api", "--method", "PUT", "repos/owner/repo/pulls/1/merge",
+            "-f", "sha=" + "a" * 40, "-f", "merge_method=merge")
+        self.assertEqual(self.actions.published["pub"], "a" * 40)
+
     def test_merge_retry_is_idempotent(self):
         self.actions.publish_bases["pub"] = "main"
         self.actions.published["pub"] = "a" * 40

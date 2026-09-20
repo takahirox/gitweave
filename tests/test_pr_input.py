@@ -62,7 +62,7 @@ class InputActionTests(unittest.TestCase):
         self.assertEqual(self.run_sync().data["commit"], FIX)
         self.assertEqual(self.action.remote_sha, FIX)
         self.assertEqual(self.action.input_pr["head_sha"], HEAD)
-        # A review/action checkpoint may have another SHA but the identical tree.
+        # A later local checkpoint does not change the known remote head.
         result = self.action.run("merge", self.merge, {"workspace_base": "d" * 40})
         self.assertEqual(result.data, {"merged": True, "url": self.raw["html_url"],
                                        "merge_commit": "merged"})
@@ -205,10 +205,18 @@ class InputActionTests(unittest.TestCase):
         self.assertEqual(result.data["merge_commit"], "merged")
         self.assertEqual(sum("PUT" in c.args for c in self.action.gh.call_args_list), 1)
 
-    def test_merge_rejects_unsynced_tree_and_changed_head(self):
+    def test_merge_ignores_unpublished_local_artifact(self):
         self.git.command.side_effect = ["local-tree", "remote-tree"]
-        with self.assertRaisesRegex(Failure, "unpublished"):
-            self.action.run("merge", self.merge, self.context)
+        result = self.action.run("merge", self.merge, self.context)
+        self.assertEqual(result.data, {"merged": True, "url": self.raw["html_url"],
+                                       "merge_commit": "merged"})
+        self.git.command.assert_not_called()
+        self.assertEqual(self.mutations, [
+            ("api", "--method", "PUT", "repos/owner/repo/pulls/10/merge",
+             "-f", "sha=" + HEAD, "-f", "merge_method=merge")])
+        self.assertEqual(self.action.remote_sha, HEAD)
+
+    def test_merge_rejects_changed_head(self):
         self.raw["head"]["sha"] = FIX
         with self.assertRaisesRegex(Failure, "known remote"):
             self.action.run("merge", self.merge, self.context)
