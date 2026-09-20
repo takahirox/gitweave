@@ -20,8 +20,10 @@ class ActionTests(unittest.TestCase):
         self.actions.gh.side_effect = ["[]", "https://github.com/owner/repo/pull/1"]
         result = self.actions.run("pub", self.pub, self.context)
         self.assertEqual(result.data["branch"], "gitweave/run/pub")
-        push = self.git.command.call_args.args
-        self.assertIn("--force-with-lease=refs/heads/gitweave/run/pub:", push)
+        self.assertEqual([c.args for c in self.git.command.call_args_list], [
+            ("ls-remote", "https://github.com/owner/repo.git", "refs/heads/gitweave/run/pub"),
+            ("push", "--force-with-lease=refs/heads/gitweave/run/pub:",
+             "https://github.com/owner/repo.git", "a" * 40 + ":refs/heads/gitweave/run/pub")])
         self.git.command.return_value = "a" * 40 + "\trefs/heads/gitweave/run/pub"
         self.actions.gh.side_effect = [json.dumps([{"number": 1, "state": "OPEN", "url": "url", "baseRefName": "main"}]), ""]
         self.actions.run("pub", self.pub, {"workspace_base": "b" * 40})

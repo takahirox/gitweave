@@ -23,9 +23,8 @@ def persist(git, target):
     refs = git.command("for-each-ref", "--format=%(refname)", prefix, git.notes).splitlines()
     # Notes may not exist when execution fails before its first attempt.
     refs = [ref for ref in refs if ref.startswith(prefix) or ref == git.notes]
-    options = ["-c", "credential.helper=!gh auth git-credential"] if target.startswith("https://github.com/") else []
     try:
-        git.command(*options, "push", "--no-follow-tags", "--", target,
+        git.command("push", "--no-follow-tags", "--", target,
                     *[f"{ref}:{ref}" for ref in refs])
     except Failure as exc:
         raise Failure("persistence", f"Provenance push failed; local refs and notes retained for Git inspection and retry\n{exc}") from exc

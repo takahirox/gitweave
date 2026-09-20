@@ -97,6 +97,13 @@ Raw logs can contain repository or prompt content; keep provenance under the sam
 
 ## Explicit GitHub actions
 
+Git transport operations (`fetch`, `push`, and `ls-remote`), including provenance
+persistence, use normal Git configuration and authentication. GitWeave does not
+inject a credential helper; configured SSH, URL rewrites, and credential helpers
+apply normally, and Git failures retain their diagnostics. To use GitHub CLI
+credentials for Git transport, configure them through your normal Git/GitHub
+setup. GitHub API operations continue to use the `gh` CLI.
+
 ```json
 {
   "kind": "action",
@@ -208,10 +215,10 @@ is used (`https://github.com/OWNER/REPO.git`), falling back to local `origin` wh
 there is no such repository. Multiple distinct workflow repositories require the
 explicit override. This keeps existing GitHub workflows durable even when their
 storage has no origin, while allowing named remotes, SSH URLs and local bare
-repositories without requiring canonical URL matching. Named remotes use ordinary
-Git push configuration and credentials; direct GitHub HTTPS destinations use the
-runtime's `gh auth git-credential` helper. Keep credentials in Git helpers rather
-than URLs, since the selected destination is recorded in the Run.
+repositories without requiring canonical URL matching. All destinations, including
+direct GitHub HTTPS URLs, use ordinary Git push configuration and credentials.
+Keep credentials in Git helpers rather than URLs, since the selected destination
+is recorded in the Run.
 
 With no workflow repository, origin or override, the Run remains local/offline
 and records `provenance_destination: null`. Its refs can be pushed later with Git.
