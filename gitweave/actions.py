@@ -64,7 +64,7 @@ class GitHubActions:
         self.remote_sha = pr["head_sha"]
         return dict(pr)
 
-    def check_input(self, *, allow_merged=False):
+    def check_input(self):
         if self.input_pr is None:
             raise Failure("pr_input", "This action requires an existing-PR Run input")
         original = self.input_pr
@@ -73,7 +73,7 @@ class GitHubActions:
                     "head_repository_id", "head_branch", "base_branch")
         if any(pr[key] != original[key] for key in identity):
             raise Failure("publication_conflict", "PR identity, head branch, or base branch changed")
-        if pr["state"] != "OPEN" and not (allow_merged and pr["state"] == "MERGED"):
+        if pr["state"] != "OPEN":
             raise Failure("publication_conflict", "Input PR is closed")
         return pr
 
@@ -93,9 +93,6 @@ class GitHubActions:
                       "branch": pr["head_branch"], "commit": commit})
 
     def merge_exact(self, repository, number, expected, pr):
-        if pr["state"] == "MERGED":
-            return Result(message="PR already merged", data={"merged": True, "url": pr["url"],
-                          "merge_commit": pr.get("merge_commit")})
         if pr["state"] != "OPEN":
             raise Failure("publication_conflict", "PR is closed")
         # REST merges immediately or rejects; unlike `gh pr merge`, it cannot queue.
@@ -145,7 +142,7 @@ class GitHubActions:
             if node["action"] == "sync_pr":
                 return self.sync_input(context)
             if node["action"] == "merge_pr" and "publish_node" not in cfg:
-                pr = self.check_input(allow_merged=True)
+                pr = self.check_input()
                 if pr["head_sha"] != self.remote_sha:
                     raise Failure("publication_conflict", "PR head differs from the known remote artifact")
                 return self.merge_exact(pr["repository"], pr["number"], self.remote_sha, pr)
@@ -175,10 +172,9 @@ class GitHubActions:
             if not expected:
                 raise Failure("approval", "Publisher has not executed in this Run")
             pr = json.loads(self.gh("pr", "view", branch, "--repo", repo, "--json",
-                                   "number,state,headRefOid,url,mergeCommit,baseRefName"))
+                                   "number,state,headRefOid,url,baseRefName"))
             if pr["headRefOid"] != expected:
                 raise Failure("publication_conflict", "PR head differs from the published artifact")
             if pr["baseRefName"] != self.publish_bases[publisher]:
                 raise Failure("publication_conflict", "Managed PR base changed")
-            pr["merge_commit"] = (pr.get("mergeCommit") or {}).get("oid")
             return self.merge_exact(repo, pr["number"], expected, pr)

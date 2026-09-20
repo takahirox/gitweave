@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Single-attempt PR merges
+
+On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 130 deterministic tests in 22.320 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+Focused managed-PR and input-PR tests verify that closed and already-merged targets fail before a merge request, and transport failures surface unchanged after one exact-SHA merge request without further calls. Existing success, expected-head/base protection, normal merge-commit requests, GitHub policy diagnostics, and unpublished-local-artifact behavior remain covered. The runtime guide now describes single-attempt behavior; historical retry-success evidence below is superseded.
+
+The diff was reviewed against the supplied issue and development/review guidelines for completeness and scope. No replacement reconciliation mechanism, live agent invocation, or external publication was introduced. Final files remain in the assigned worktree for GitWeave checkpointing; this evidence does not constitute PR approval.
+
 ## Merge ignores unpublished local artifacts
 
 On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 129 deterministic tests in 22.848 seconds: 128 passed and the installed entry-point test was skipped. After installing the package in the assigned worktree's `.venv`, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -p test_cli.py -v` passed all 13 CLI tests, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.

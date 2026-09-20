@@ -101,12 +101,18 @@ class ActionTests(unittest.TestCase):
             "-f", "sha=" + "a" * 40, "-f", "merge_method=merge")
         self.assertEqual(self.actions.published["pub"], "a" * 40)
 
-    def test_merge_retry_is_idempotent(self):
+    def test_managed_merge_rejects_non_open_pr(self):
         self.actions.publish_bases["pub"] = "main"
         self.actions.published["pub"] = "a" * 40
-        self.actions.gh.return_value = json.dumps(dict(number=1, state="MERGED", baseRefName="main", headRefOid="a" * 40, url="url", mergeCommit={"oid": "merged"}))
-        self.assertTrue(self.actions.run("merge", self.merge, self.context).data["merged"])
-        self.assertEqual(self.actions.gh.call_count, 1)
+        for state in ("CLOSED", "MERGED"):
+            with self.subTest(state=state):
+                self.actions.gh = Mock(return_value=json.dumps(dict(
+                    number=1, state=state, baseRefName="main",
+                    headRefOid="a" * 40, url="url", mergeCommit={"oid": "merged"})))
+                with self.assertRaisesRegex(Failure, "PR is closed") as raised:
+                    self.actions.run("merge", self.merge, self.context)
+                self.assertEqual(raised.exception.kind, "publication_conflict")
+                self.assertEqual(self.actions.gh.call_count, 1)
 
     def test_changed_pr_head_is_not_merged(self):
         self.actions.published["pub"] = "expected"
@@ -144,16 +150,19 @@ class ActionTests(unittest.TestCase):
                                  ("api", "--method", "PUT", "repos/owner/repo/pulls/1/merge",
                                   "-f", "sha=" + "a" * 40, "-f", "merge_method=merge"))
 
-    def test_managed_merge_timeout_after_success(self):
+    def test_managed_merge_returns_transport_failure(self):
         self.actions.published["pub"] = "a" * 40
         self.actions.publish_bases["pub"] = "main"
         pr = dict(number=1, state="OPEN", headRefOid="a" * 40, url="url", baseRefName="main")
-        merged = dict(pr, state="MERGED", mergeCommit={"oid": "merged"})
-        self.actions.gh.side_effect = [json.dumps(pr), Failure("github", "timeout", retryable=True), json.dumps(merged)]
-        with self.assertRaises(Failure):
+        failure = Failure("github", "timeout", retryable=True)
+        self.actions.gh.side_effect = [json.dumps(pr), failure]
+        with self.assertRaises(Failure) as raised:
             self.actions.run("merge", self.merge, self.context)
-        self.assertTrue(self.actions.run("merge", self.merge, self.context).data["merged"])
-        self.assertEqual(sum("PUT" in c.args for c in self.actions.gh.call_args_list), 1)
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(self.actions.gh.call_count, 2)
+        self.actions.gh.assert_called_with(
+            "api", "--method", "PUT", "repos/owner/repo/pulls/1/merge",
+            "-f", "sha=" + "a" * 40, "-f", "merge_method=merge")
 
     def test_github_commands_have_no_implicit_timeout(self):
         action = GitHubActions(self.git, "run")
