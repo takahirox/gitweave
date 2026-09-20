@@ -1,5 +1,4 @@
 """Existing-PR contracts, with no network or live agents."""
-import copy
 import io
 import json
 from pathlib import Path
@@ -215,32 +214,45 @@ class InputActionTests(unittest.TestCase):
             self.action.run("merge", self.merge, self.context)
         self.assertFalse(self.mutations)
 
-    def test_fetch_verifies_exact_head_and_retains_base(self):
-        self.git.resolve.side_effect = [HEAD, BASE]
+    def test_fetch_freezes_actual_commits_with_one_metadata_read(self):
+        # The PR head ref may differ from the earlier API value.
+        self.git.resolve.side_effect = [FIX, BASE]
+        self.action.gh.reset_mock()
         metadata = self.action.resolve_input("owner/repo", 10)
+        self.assertEqual(metadata["head_sha"], FIX)
         self.assertEqual(metadata["base_sha"], BASE)
-        calls = [c.args for c in self.git.command.call_args_list]
-        self.assertEqual(calls, [
+        self.assertEqual(self.action.input_pr, metadata)
+        self.assertEqual(self.action.remote_sha, FIX)
+        self.action.gh.assert_called_once_with("api", "repos/owner/repo/pulls/10")
+        self.assertEqual([c.args for c in self.git.resolve.call_args_list],
+                         [("FETCH_HEAD",), ("FETCH_HEAD",)])
+        self.assertEqual([c.args for c in self.git.command.call_args_list], [
             ("fetch", "--no-tags", "https://github.com/owner/repo.git", "refs/pull/10/head"),
-            ("update-ref", "refs/gitweave/run/input/head", HEAD),
+            ("update-ref", "refs/gitweave/run/input/head", FIX),
             ("fetch", "--no-tags", "https://github.com/owner/repo.git", BASE),
             ("update-ref", "refs/gitweave/run/input/base", BASE)])
-        self.git.resolve.side_effect = [FIX]
-        with self.assertRaisesRegex(Failure, "moved while fetching"):
-            self.action.resolve_input("owner/repo", 10)
 
-    def test_fetch_rejects_closed_input_and_mid_fetch_change(self):
+    def test_fetch_rejects_closed_input(self):
         self.raw["state"] = "closed"
         with self.assertRaisesRegex(Failure, "must be open"):
             self.action.resolve_input("owner/repo", 10)
         self.git.command.assert_not_called()
-        self.raw["state"] = "open"
-        changed = copy.deepcopy(self.raw)
-        changed["base"]["ref"] = "release"
-        self.action.gh.side_effect = [json.dumps(self.raw), json.dumps(changed)]
-        self.git.resolve.side_effect = [HEAD, BASE]
-        with self.assertRaisesRegex(Failure, "changed while fetching"):
-            self.action.resolve_input("owner/repo", 10)
+
+    def test_fetch_failure_does_not_initialize_input(self):
+        for failed_fetch in (1, 2):
+            with self.subTest(failed_fetch=failed_fetch):
+                self.setUp()
+                self.action.input_pr = None
+                self.action.remote_sha = None
+                self.git.resolve.return_value = HEAD
+                failure = Failure("git", "fetch failed", retryable=True)
+                self.git.command.side_effect = ([failure] if failed_fetch == 1
+                                                else ["", "", failure])
+                with self.assertRaises(Failure) as raised:
+                    self.action.resolve_input("owner/repo", 10)
+                self.assertIs(raised.exception, failure)
+                self.assertIsNone(self.action.input_pr)
+                self.assertIsNone(self.action.remote_sha)
 
 
 class CLITests(unittest.TestCase):
@@ -340,6 +352,29 @@ class RepositoryWorkflowTests(unittest.TestCase):
         self.assertEqual(retained["input_pr"], record["input_pr"])
         self.assertEqual(git(run.git.repo, "rev-parse", f"refs/gitweave/{run.id}/input/base"), self.base)
         self.assertEqual(git(self.remote, "rev-parse", "HEAD"), self.base)
+
+    def test_runtime_uses_fetched_input_after_remote_refs_move(self):
+        # Metadata reports the old head, while the PR ref already has the new one.
+        with patch.object(GitHubActions, "gh", return_value=json.dumps(pull(self.base, self.base))) as api:
+            def work(n, c, w):
+                self.assertEqual(git(w, "rev-parse", "HEAD"), self.head)
+                self.assertEqual((w / "artifact").read_text(), "needs fix")
+                self.assertEqual(c["input_pr"]["head_sha"], self.head)
+                self.assertEqual(c["input_pr"]["base_sha"], self.base)
+                self.assertEqual(c["pr_remote_sha"], self.head)
+                return Result()
+            run = self.runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), work)
+            git(self.remote, "update-ref", "refs/pull/10/head", self.base)
+            git(self.remote, "update-ref", "refs/heads/topic", self.base)
+            git(self.remote, "update-ref", "refs/heads/main", self.head)
+            record = run.run()
+            api.assert_called_once_with("api", "repos/owner/repo/pulls/10")
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual(record["base_commit"], self.head)
+        for name, commit in (("head", self.head), ("base", self.base)):
+            self.assertEqual(record["input_pr"][name + "_sha"], commit)
+            self.assertEqual(git(run.git.repo, "rev-parse",
+                                 f"refs/gitweave/{run.id}/input/{name}"), commit)
 
     def test_example_reviews_fixes_syncs_then_merges(self):
         calls = []

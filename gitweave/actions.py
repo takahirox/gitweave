@@ -54,16 +54,12 @@ class GitHubActions:
         # Fetch GitHub's PR head, never its synthetic test-merge commit.
         self.git.command("fetch", "--no-tags",
                          remote, f"refs/pull/{number}/head")
-        if self.git.resolve("FETCH_HEAD") != pr["head_sha"]:
-            raise Failure("publication_conflict", "PR head moved while fetching input")
+        pr["head_sha"] = self.git.resolve("FETCH_HEAD")
         self.git.command("update-ref", f"refs/gitweave/{self.run_id}/input/head", pr["head_sha"])
         self.git.command("fetch", "--no-tags",
                          remote, pr["base_sha"])
-        if self.git.resolve("FETCH_HEAD") != pr["base_sha"]:
-            raise Failure("publication_conflict", "Fetched base does not match input")
+        pr["base_sha"] = self.git.resolve("FETCH_HEAD")
         self.git.command("update-ref", f"refs/gitweave/{self.run_id}/input/base", pr["base_sha"])
-        if self.read_pr(repository, number) != pr:
-            raise Failure("publication_conflict", "PR changed while fetching input")
         self.input_pr = pr
         self.remote_sha = pr["head_sha"]
         return dict(pr)
