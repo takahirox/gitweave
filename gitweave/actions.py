@@ -16,7 +16,9 @@ class GitHubActions:
         self.publish_bases = {}
         self.input_pr = None
         self.remote_sha = None
-        self.lock = threading.Lock()
+        self.input_pr_lock = threading.Lock()
+        self.publisher_locks = {}
+        self.publisher_locks_lock = threading.Lock()
 
     def gh(self, *args):
         try:
@@ -135,19 +137,25 @@ class GitHubActions:
         return result(read("--method", "POST", endpoint + "/comments", "-f", f"body={body}"))
 
     def run(self, node_id, node, context):
-        with self.lock:
-            cfg = node.get("config", {})
-            if node["action"] in ("comment_issue", "comment_pr"):
-                return self.comment(node, context)
-            if node["action"] == "sync_pr":
-                return self.sync_input(context)
-            if node["action"] == "merge_pr" and "publish_node" not in cfg:
+        cfg = node.get("config", {})
+        if node["action"] in ("comment_issue", "comment_pr"):
+            return self.comment(node, context)
+        if node["action"] == "sync_pr" or (node["action"] == "merge_pr" and "publish_node" not in cfg):
+            # Sync and merge share the input PR's known remote head.
+            with self.input_pr_lock:
+                if node["action"] == "sync_pr":
+                    return self.sync_input(context)
                 pr = self.check_input()
                 if pr["head_sha"] != self.remote_sha:
                     raise Failure("publication_conflict", "PR head differs from the known remote artifact")
                 return self.merge_exact(pr["repository"], pr["number"], self.remote_sha, pr)
-            repo = cfg["repository"]
-            publisher = node_id if node["action"] == "publish_pr" else cfg["publish_node"]
+        repo = cfg["repository"]
+        publisher = node_id if node["action"] == "publish_pr" else cfg["publish_node"]
+        with self.publisher_locks_lock:
+            lock = self.publisher_locks.setdefault(publisher, threading.Lock())
+        # Keep this publisher's push, PR update, and recorded head/base coherent
+        # with repeated publication and merges, without blocking other publishers.
+        with lock:
             branch = f"gitweave/{self.run_id}/{publisher}"
             if node["action"] == "publish_pr":
                 commit = context["workspace_base"]
