@@ -15,35 +15,63 @@ class ActionTests(unittest.TestCase):
         self.merge = {"action": "merge_pr", "config": {"repository": "owner/repo", "publish_node": "pub"}}
         self.context = {"workspace_base": "a" * 40}
 
-    def test_publish_and_sync_use_managed_branch_and_lease(self):
-        self.git.command.return_value = ""
+    def test_publish_creates_then_updates_managed_pr(self):
+        calls = Mock()
+        calls.attach_mock(self.git.command, "git")
+        calls.attach_mock(self.actions.gh, "gh")
         self.actions.gh.side_effect = ["[]", "https://github.com/owner/repo/pull/1"]
         result = self.actions.run("pub", self.pub, self.context)
-        self.assertEqual(result.data["branch"], "gitweave/run/pub")
-        self.assertEqual([c.args for c in self.git.command.call_args_list], [
-            ("ls-remote", "https://github.com/owner/repo.git", "refs/heads/gitweave/run/pub"),
-            ("push", "--force-with-lease=refs/heads/gitweave/run/pub:",
-             "https://github.com/owner/repo.git", "a" * 40 + ":refs/heads/gitweave/run/pub")])
-        self.git.command.return_value = "a" * 40 + "\trefs/heads/gitweave/run/pub"
-        self.actions.gh.side_effect = [json.dumps([{"number": 1, "state": "OPEN", "url": "url", "baseRefName": "main"}]), ""]
-        self.actions.run("pub", self.pub, {"workspace_base": "b" * 40})
-        self.assertIn("--force-with-lease=refs/heads/gitweave/run/pub:" + "a" * 40, self.git.command.call_args.args)
-        self.assertEqual(self.actions.gh.call_args.args[:2], ("pr", "edit"))
+        self.assertEqual(result.data, {"branch": "gitweave/run/pub", "commit": "a" * 40,
+                                       "url": "https://github.com/owner/repo/pull/1"})
+        self.assertEqual([c[0] for c in calls.mock_calls], ["git", "gh", "gh"])
+        self.git.command.assert_called_once_with(
+            "push", "--force", "https://github.com/owner/repo.git",
+            "a" * 40 + ":refs/heads/gitweave/run/pub")
+        self.assertEqual(self.actions.gh.call_args_list[0].args,
+                         ("pr", "list", "--repo", "owner/repo", "--head", "gitweave/run/pub",
+                          "--state", "all", "--json", "number,url"))
+        self.actions.gh.assert_called_with(
+            "pr", "create", "--repo", "owner/repo", "--head", "gitweave/run/pub",
+            "--base", "main", "--title", "Title", "--body", "")
+        self.actions.gh.side_effect = [json.dumps([{"number": 1, "url": "url"}]), ""]
+        result = self.actions.run("pub", self.pub, {"workspace_base": "b" * 40})
+        self.git.command.assert_called_with(
+            "push", "--force", "https://github.com/owner/repo.git",
+            "b" * 40 + ":refs/heads/gitweave/run/pub")
+        self.actions.gh.assert_called_with(
+            "pr", "edit", "1", "--repo", "owner/repo", "--base", "main",
+            "--title", "Title", "--body", "")
+        self.assertEqual(result.data["url"], "url")
+        self.assertEqual(self.actions.published, {"pub": "b" * 40})
+        self.assertEqual(self.actions.publish_bases, {"pub": "main"})
 
-    def test_publish_retry_after_remote_success(self):
-        # A timed-out push may have succeeded. Recognize our exact artifact.
-        self.git.command.return_value = "a" * 40 + "\tref"
-        self.actions.gh.side_effect = ["[]", "url"]
-        self.actions.run("pub", self.pub, self.context)
-        self.assertEqual(self.git.command.call_count, 1)
-
-    def test_external_branch_update_is_not_overwritten(self):
-        self.git.command.return_value = "external\tref"
-        self.actions.gh.return_value = "[]"
+    def test_publish_push_failure_is_returned_without_github_calls(self):
+        failure = Failure("git", "remote rejected push", retryable=True)
+        self.git.command.side_effect = failure
         with self.assertRaises(Failure) as raised:
             self.actions.run("pub", self.pub, self.context)
-        self.assertEqual(raised.exception.kind, "publication_conflict")
-        self.assertEqual(self.git.command.call_count, 1)
+        self.assertIs(raised.exception, failure)
+        self.actions.gh.assert_not_called()
+        self.assertEqual(self.actions.published, {})
+
+    def test_publish_github_failures_and_retries_use_ordinary_push(self):
+        for prs in ([], [{"number": 1, "url": "url", "state": "CLOSED",
+                          "baseRefName": "different"}]):
+            with self.subTest(prs=prs):
+                self.git.command.reset_mock()
+                failure = Failure("github", "GitHub rejected publication", retryable=True)
+                self.actions.gh.side_effect = [json.dumps(prs), failure,
+                                               json.dumps(prs), "url"]
+                with self.assertRaises(Failure) as raised:
+                    self.actions.run("pub", self.pub, self.context)
+                self.assertIs(raised.exception, failure)
+                self.actions.run("pub", self.pub, self.context)
+                self.assertEqual(self.git.command.call_count, 2)
+                self.assertEqual(self.git.command.call_args_list[0],
+                                 self.git.command.call_args_list[1])
+                self.assertEqual(self.git.command.call_args.args,
+                                 ("push", "--force", "https://github.com/owner/repo.git",
+                                  "a" * 40 + ":refs/heads/gitweave/run/pub"))
 
     def test_merge_uses_github_policy_and_exact_head(self):
         self.actions.published["pub"] = "a" * 40
@@ -64,12 +92,6 @@ class ActionTests(unittest.TestCase):
         self.actions.gh.return_value = json.dumps(dict(number=1, state="MERGED", baseRefName="main", headRefOid="a" * 40, url="url", mergeCommit={"oid": "merged"}))
         self.assertTrue(self.actions.run("merge", self.merge, self.context).data["merged"])
         self.assertEqual(self.actions.gh.call_count, 1)
-
-    def test_closed_pr_is_rejected_before_pushing(self):
-        self.actions.gh.return_value = json.dumps([{"state": "CLOSED", "baseRefName": "main"}])
-        with self.assertRaises(Failure):
-            self.actions.run("pub", self.pub, self.context)
-        self.git.command.assert_not_called()
 
     def test_changed_pr_head_is_not_merged(self):
         self.actions.published["pub"] = "expected"

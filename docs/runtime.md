@@ -118,7 +118,7 @@ setup. GitHub API operations continue to use the `gh` CLI.
 }
 ```
 
-`publish_pr` pushes the selected workspace-base artifact to `gitweave/<run-id>/<declared-node-id>` and creates or updates its PR. Revisit the same publisher node after fixes to synchronize the same PR. Updates use an exact force-with-lease and refuse externally changed heads; a retry recognizes its already-published exact commit. Actions are serialized within a Run.
+`publish_pr` pushes the selected workspace-base artifact to `gitweave/<run-id>/<declared-node-id>` and creates or updates its PR. Revisit the same publisher node after fixes to synchronize the same PR. Each attempt force-pushes only that GitWeave-owned branch, then looks up the corresponding PR and creates it or edits its base, title, and body. Git and GitHub errors are returned directly; there is no remote-head preflight or special retry-success recognition. The last pushed commit and configured base remain recorded for the exact-head checks in `merge_pr`. Actions are serialized within a Run.
 
 `merge_pr` with `config.repository` and `config.publish_node` targets a publisher in this graph. With empty/omitted `config`, it targets the existing input PR. It requires the exact known remote head and the original base branch. The selected workspace artifact must have the same tree as that remote commit: empty review/action checkpoints are allowed, but unpublished file changes must be synchronized first.
 
