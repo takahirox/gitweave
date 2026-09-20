@@ -27,6 +27,5 @@ def persist(git, target):
     try:
         git.command(*options, "push", "--no-follow-tags", "--", target,
                     *[f"{ref}:{ref}" for ref in refs])
-    except Failure:
-        # Git diagnostics can include credentials from URLs or credential helpers.
-        raise Failure("persistence", "Provenance push failed; local refs and notes retained for Git inspection and retry") from None
+    except Failure as exc:
+        raise Failure("persistence", f"Provenance push failed; local refs and notes retained for Git inspection and retry\n{exc}") from exc

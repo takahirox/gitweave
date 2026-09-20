@@ -251,7 +251,7 @@ conflicts automatically.
 Persistence failure raises a `persistence` error (CLI exit 2), even if execution
 completed. The local final Run record, refs and notes remain available for
 inspection and retry. The record's `status` describes execution, not transfer
-success; it is saved before the push. Transfer errors omit raw Git stderr because
-it can contain credentials. Final failed Runs are pushed too. A hard crash before
-finalization can leave a running Run locally. Successful persistence does not
-imply task approval.
+success; it is saved before the push. Transfer errors preserve the underlying Git
+diagnostic alongside the persistence failure context. Final failed Runs are pushed
+too. A hard crash before finalization can leave a running Run locally. Successful
+persistence does not imply task approval.

@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Provenance push failure diagnostics
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 121 deterministic tests on Python 3.14.6 in 23.496 seconds: 120 passed and the installed entry-point test was skipped. After installing the package in the assigned worktree's `.venv`, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -p test_cli.py -v` passed all 13 CLI tests, including that entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+All nine focused persistence tests passed. Local Git tests verify rejected-push and missing-remote diagnostics, CLI exit 2, retained final Run records and notes, and successful native Git retry. Mocked authentication and multiline transport failures verify intact diagnostic text, exception chaining, unchanged persistence classification/retryability, and retained refs. No replacement redaction policy was introduced.
+
+The diff was reviewed against the supplied issue and development/review guidelines for completeness and scope. No live agents or external publication were invoked. Final files remain in the assigned worktree for GitWeave checkpointing; this evidence does not constitute PR approval.
+
 ## Native Agent failure diagnostics
 
 On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 121 deterministic tests on Python 3.14.6 in 23.326 seconds, including the installed entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
