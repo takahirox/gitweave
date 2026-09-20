@@ -121,9 +121,17 @@ GitWeave v0 provides a Python CLI with Codex and Claude adapters:
 ```sh
 python -m pip install .
 gitweave run --graph examples/single.json --repo /path/to/repo --commit HEAD "Implement the request"
+
+# Start from an existing GitHub PR
+gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10 "Review, fix, and merge this PR"
 ```
 
 See the [runtime guide](docs/runtime.md) for graph syntax, parallel execution, fan-out, review/fix loops, Git records, explicit PR actions, and validation. [The parallel example](examples/parallel.json) combines both providers in one graph.
+
+Final Runs automatically push their GitWeave refs and notes to the artifact
+repository or configured origin. Offline Runs can be pushed later with Git;
+native Git fetch restores a selected Run into a fresh repository.
+See [destination selection and native Git fetch/retry](docs/runtime.md#durable-provenance).
 
 ## Validate a graph
 

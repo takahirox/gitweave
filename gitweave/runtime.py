@@ -1,8 +1,10 @@
 """Bounded structured graph scheduling with Git-backed attempt provenance."""
 import asyncio
+import copy
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 from pathlib import Path
 import tempfile
 import shutil
@@ -11,6 +13,7 @@ import uuid
 from .actions import GitHubActions
 from .adapters import CLIAdapter
 from .git import Git
+from .persistence import destination, persist
 from .graph import validate_graph
 from .model import Failure, Result, equal, pointer, validate
 
@@ -20,20 +23,38 @@ def now():
 
 
 class Runtime:
-    def __init__(self, graph_text, repo, commit, request, *, adapters=None, actions=None):
+    def __init__(self, graph_text, repo, commit, request, *, adapters=None, actions=None, pr=None, provenance_remote=None):
         self.graph = validate_graph(json.loads(graph_text))
         self.id = uuid.uuid4().hex
-        self.git = Git(repo, self.id)
-        self.base = self.git.resolve(commit)
+        if pr is not None:
+            if commit is not None or type(pr) is not int or pr <= 0:
+                raise Failure("pr_input", "Use a positive PR number without --commit")
+            if not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", str(repo)) or str(repo).split("/")[1] in (".", ".."):
+                raise Failure("pr_input", "--pr requires a GitHub owner/repo identity, not a checkout path")
+            storage = Path.cwd() / ".gitweave" / "runs" / self.id / "repository.git"
+            self.git = Git(storage, self.id, initialize=True)
+        else:
+            if commit is None:
+                raise Failure("input", "A local repository requires --commit")
+            self.git = Git(repo, self.id)
+        self.actions = actions if actions is not None else GitHubActions(self.git, self.id)
+        self.input_pr = self.actions.resolve_input(str(repo), pr) if pr is not None else None
+        self.base = self.input_pr["head_sha"] if self.input_pr else self.git.resolve(commit)
+        for node in self.graph["nodes"].values():
+            if node.get("action") == "sync_pr" or (node.get("action") == "merge_pr" and "publish_node" not in node.get("config", {})):
+                if self.input_pr is None:
+                    raise Failure("pr_input", "Input PR actions require --pr")
         self.adapters = adapters if adapters is not None else {name: CLIAdapter(name) for name in ("codex", "claude")}
         for node in self.graph["nodes"].values():
             if node["kind"] == "agent" and node["provider"] not in self.adapters:
                 raise Failure("graph", f"Provider is not registered: {node['provider']}")
-        self.actions = actions if actions is not None else GitHubActions(self.git, self.id)
         self.record = {"version": 1, "run_id": self.id, "repository": str(self.git.repo),
-                       "base_commit": self.base, "request": request, "graph": graph_text,
+                       "base_commit": self.base, "input_pr": self.input_pr,
+                       "pr_remote_sha": self.input_pr["head_sha"] if self.input_pr else None,
+                       "request": request, "graph": graph_text,
                        "graph_digest": hashlib.sha256(graph_text.encode()).hexdigest(),
                        "started_at": now(), "status": "running", "attempts": [], "outputs": []}
+        self.record["provenance_destination"] = destination(self.git, self.record, provenance_remote)
         self.steps = 0
         self.instances = 0
         self.stopped = False
@@ -49,7 +70,9 @@ class Runtime:
 
     def context(self, inputs, item, origin, base):
         return {"run_id": self.id, "request": self.record["request"], "inputs": inputs,
-                "item": item, "fan_out_origin": origin, "workspace_base": base}
+                "item": item, "fan_out_origin": origin, "workspace_base": base,
+                "input_pr": copy.deepcopy(self.input_pr),
+                "pr_remote_sha": getattr(self.actions, "remote_sha", None)}
 
     @staticmethod
     def control_value(inputs, path):
@@ -119,6 +142,7 @@ class Runtime:
                 raise Failure("graph", f"{name}: workspace_base index outside inputs")
             base = self.base if choice == "run" else inputs[choice]["commit"]
             context = self.context(inputs, item, origin, base)
+            context["instance_id"] = instance
             for attempt in range(1, self.graph.get("retries", 0) + 2):
                 if self.stopped:
                     raise Failure("stopped", "Run stopped before retry")
@@ -131,6 +155,7 @@ class Runtime:
                 result, commit, error = await asyncio.to_thread(self.attempt, name, node, context, record)
                 self.record["attempts"].append({"instance_id": instance, "attempt": attempt,
                                                  "commit": commit, "status": record["status"]})
+                self.record["pr_remote_sha"] = getattr(self.actions, "remote_sha", None)
                 self.git.run_record(self.record)
                 if error is None:
                     return {"node_id": name, "instance_id": instance, "commit": commit,
@@ -151,7 +176,7 @@ class Runtime:
             if node["kind"] == "agent":
                 workspace = temp / "workspace"
                 self.git.add_worktree(workspace, context["workspace_base"])
-                result = self.adapters[node["provider"]].run(node, context, workspace, self.graph.get("timeout", 600))
+                result = self.adapters[node["provider"]].run(node, context, workspace, self.graph.get("timeout"))
             else:
                 result = self.actions.run(name, node, context)
             if "schema" in node:
@@ -198,6 +223,8 @@ class Runtime:
             self.record.update(ended_at=now(), steps=self.steps, errors=self.errors,
                                notes_ref=self.git.notes, run_ref=f"refs/gitweave/{self.id}/run")
             self.git.run_record(self.record)
+        if self.record["provenance_destination"] is not None:
+            persist(self.git, self.record["provenance_destination"])
         return self.record
 
     def run(self):

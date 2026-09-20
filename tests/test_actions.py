@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from gitweave.actions import GitHubActions
 from gitweave.model import Failure
 
@@ -42,25 +42,23 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "publication_conflict")
         self.assertEqual(self.git.command.call_count, 1)
 
-    def test_merge_requires_approval_and_exact_head(self):
+    def test_merge_uses_github_policy_and_exact_head(self):
         self.actions.published["pub"] = "a" * 40
-        pr = dict(number=1, state="OPEN", reviewDecision="REVIEW_REQUIRED", headRefOid="a" * 40, url="url", mergeCommit=None)
-        self.actions.gh.return_value = json.dumps(pr)
-        result = self.actions.run("merge", self.merge, self.context)
-        self.assertFalse(result.data["merged"])
-        self.assertEqual(self.actions.gh.call_count, 1)
-        pr["reviewDecision"] = "APPROVED"
-        self.actions.gh.side_effect = [json.dumps(pr), "", json.dumps(dict(pr, state="MERGED", mergeCommit={"oid": "integrated"}))]
+        self.actions.publish_bases["pub"] = "main"
+        pr = dict(number=1, state="OPEN", reviewDecision="REVIEW_REQUIRED", headRefOid="a" * 40,
+                  url="url", mergeCommit=None, baseRefName="main")
+        self.actions.gh.side_effect = [json.dumps(pr), json.dumps({"merged": True, "sha": "integrated"})]
         result = self.actions.run("merge", self.merge, self.context)
         self.assertTrue(result.data["merged"])
         self.assertEqual(result.data["merge_commit"], "integrated")
-        merge_args = self.actions.gh.call_args_list[-2].args
-        self.assertIn("--match-head-commit", merge_args)
-        self.assertNotIn("--admin", merge_args)
+        merge_args = self.actions.gh.call_args.args
+        self.assertEqual(merge_args, ("api", "--method", "PUT", "repos/owner/repo/pulls/1/merge",
+                                     "-f", "sha=" + "a" * 40, "-f", "merge_method=merge"))
 
     def test_merge_retry_is_idempotent(self):
+        self.actions.publish_bases["pub"] = "main"
         self.actions.published["pub"] = "a" * 40
-        self.actions.gh.return_value = json.dumps(dict(number=1, state="MERGED", headRefOid="a" * 40, url="url", mergeCommit={"oid": "merged"}))
+        self.actions.gh.return_value = json.dumps(dict(number=1, state="MERGED", baseRefName="main", headRefOid="a" * 40, url="url", mergeCommit={"oid": "merged"}))
         self.assertTrue(self.actions.run("merge", self.merge, self.context).data["merged"])
         self.assertEqual(self.actions.gh.call_count, 1)
 
@@ -76,3 +74,67 @@ class ActionTests(unittest.TestCase):
         with self.assertRaises(Failure):
             self.actions.run("merge", self.merge, self.context)
         self.assertEqual(self.actions.gh.call_count, 1)
+
+    def test_managed_merge_policy_failure_and_retarget(self):
+        self.actions.published["pub"] = "a" * 40
+        self.actions.publish_bases["pub"] = "main"
+        pr = dict(number=1, state="OPEN", headRefOid="a" * 40, url="url", baseRefName="release")
+        self.actions.gh.return_value = json.dumps(pr)
+        with self.assertRaisesRegex(Failure, "base changed"):
+            self.actions.run("merge", self.merge, self.context)
+        self.assertEqual(self.actions.gh.call_count, 1)
+        pr["baseRefName"] = "main"
+        for response, diagnostic, kind, retryable in (
+                (json.dumps({"merged": False, "message": "Required checks pending"}),
+                 "Required checks pending", "merge_policy", False),
+                (Failure("github", "HTTP 405: Required reviews missing", retryable=True),
+                 "Required reviews missing", "github", True),
+                (json.dumps({"merged": False, "message": "Merge commits are not allowed"}),
+                 "Merge commits are not allowed", "merge_policy", False),
+                (Failure("github", "HTTP 405: Merge commits are not allowed", retryable=True),
+                 "HTTP 405: Merge commits are not allowed", "github", True)):
+            with self.subTest(diagnostic=diagnostic):
+                self.actions.gh = Mock(side_effect=[json.dumps(pr), response])
+                with self.assertRaisesRegex(Failure, diagnostic) as raised:
+                    self.actions.run("merge", self.merge, self.context)
+                self.assertEqual(raised.exception.kind, kind)
+                self.assertEqual(raised.exception.retryable, retryable)
+                self.assertEqual(self.actions.gh.call_count, 2)
+                self.assertEqual(self.actions.gh.call_args.args,
+                                 ("api", "--method", "PUT", "repos/owner/repo/pulls/1/merge",
+                                  "-f", "sha=" + "a" * 40, "-f", "merge_method=merge"))
+
+    def test_managed_merge_timeout_after_success(self):
+        self.actions.published["pub"] = "a" * 40
+        self.actions.publish_bases["pub"] = "main"
+        pr = dict(number=1, state="OPEN", headRefOid="a" * 40, url="url", baseRefName="main")
+        merged = dict(pr, state="MERGED", mergeCommit={"oid": "merged"})
+        self.actions.gh.side_effect = [json.dumps(pr), Failure("github", "timeout", retryable=True), json.dumps(merged)]
+        with self.assertRaises(Failure):
+            self.actions.run("merge", self.merge, self.context)
+        self.assertTrue(self.actions.run("merge", self.merge, self.context).data["merged"])
+        self.assertEqual(sum("PUT" in c.args for c in self.actions.gh.call_args_list), 1)
+
+    def test_github_transport_matches_git_remote_host(self):
+        action = GitHubActions(self.git, "run")
+        with patch("gitweave.actions.subprocess.run", return_value=Mock(returncode=0, stdout="{}")) as command:
+            action.gh("api", "repos/owner/repo")
+        self.assertEqual(command.call_args.kwargs["env"]["GH_HOST"], "github.com")
+
+    def test_comments_coexist_with_publication_and_merge(self):
+        self.git.command.return_value = ""
+        self.actions.gh.side_effect = ["[]", "https://example.test/pr"]
+        self.actions.run("pub", self.pub, self.context)
+        known = dict(self.actions.published)
+        for action in ("comment_issue", "comment_pr"):
+            target = {"number": 42}
+            if action == "comment_pr":
+                target["pull_request"] = {}
+            self.actions.gh.side_effect = [json.dumps(target), "[]", json.dumps({"id": 7, "html_url": "comment"})]
+            self.actions.run("comment", {"action": action, "config": {
+                "repository": "other/repository", "number": 42, "body": "Findings"}},
+                dict(self.context, instance_id=action))
+            self.assertEqual(self.actions.published, known)
+        pr = dict(number=1, state="OPEN", headRefOid="a" * 40, url="url", baseRefName="main")
+        self.actions.gh.side_effect = [json.dumps(pr), json.dumps({"merged": True, "sha": "merged"})]
+        self.assertTrue(self.actions.run("merge", self.merge, self.context).data["merged"])

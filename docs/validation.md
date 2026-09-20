@@ -1,5 +1,19 @@
 # v0 validation evidence
 
+## Issue #23: unchanged Agent Node environment
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` passed all 92 deterministic tests on Python 3.14.6. Adapter tests launch `/usr/bin/env` with fake parent values and compare the complete inherited environment, covering development settings, native authentication, GitHub credentials, SSH variables, Git repository/configuration overrides, credential helpers, and transport settings. Mocked Codex and Claude launches verify normal inheritance (no `env` argument), unchanged CLI arguments, sandbox modes, and assigned worktree instructions. System Action credential and fixed-host assertions remain intact.
+
+`python3 -m gitweave --help` and `git diff --check` passed. No live agent tests or remote publication were performed. Runtime-owned Git internals are unchanged. The historical filtering coverage below records the earlier policy, which Issue #23 supersedes along with Issue #16.
+
+## Issue #11: optional native sandboxing
+
+On 2026-09-20, installed `codex-cli 0.155.1` reported `read-only`, `workspace-write`, and `danger-full-access` as the supported `--sandbox` values in `codex exec --help`. The help lists the combined approval/sandbox bypass as a separate option; GitWeave does not use it.
+
+`python3 -m unittest discover -s tests -v`: all 80 deterministic tests passed. New coverage checks the explicit nonrestrictive Codex default, all three explicit modes, optional configuration for other providers, rejection of unsupported values/types/providers and action-node settings, rejection before CLI launch, unchanged Claude arguments, assigned worktree arguments and instructions, native authentication inheritance, and publication-credential exclusion for every mode. Existing System Action tests verify that runtime-owned credentials remain available separately. `git diff --check` passed. No live agent smoke or remote publication was performed for this change.
+
+## Earlier validation
+
 Validation for Issue #5 / PR #6 on 2026-09-20.
 
 ## Deterministic validation

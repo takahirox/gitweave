@@ -9,7 +9,7 @@ from .model import Failure
 
 
 class Git:
-    def __init__(self, repo, run_id):
+    def __init__(self, repo, run_id, *, initialize=False):
         self.repo = Path(repo).resolve()
         self.run_id = run_id
         self.notes = f"refs/notes/gitweave/{run_id}"
@@ -17,6 +17,9 @@ class Git:
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         self.env.update(GIT_AUTHOR_NAME="GitWeave", GIT_AUTHOR_EMAIL="gitweave@localhost",
                         GIT_COMMITTER_NAME="GitWeave", GIT_COMMITTER_EMAIL="gitweave@localhost")
+        if initialize:
+            self.repo.mkdir(parents=True, exist_ok=False)
+            self.command("init", "--bare")
         self.command("rev-parse", "--git-common-dir")
 
     def command(self, *args, cwd=None, input=None, env=None):

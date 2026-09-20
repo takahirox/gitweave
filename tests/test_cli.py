@@ -119,13 +119,37 @@ class CLITests(unittest.TestCase):
     def test_run_behavior_is_preserved(self):
         for status in ("completed", "failed"):
             with self.subTest(status=status), patch.object(cli, "Runtime") as runtime:
-                record = dict(run_id="id", status=status, run_ref="run", notes_ref="notes",
+                record = dict(run_id="id", status=status, repository="owner/repo", run_ref="run", notes_ref="notes",
                               outputs=[], failure={"kind": "test", "message": "failed"})
                 runtime.return_value.run.return_value = record
                 code, stdout, stderr = self.invoke("run", "--graph", self.path, "--repo", self.directory,
                                                    "--commit", "HEAD", "request")
-                runtime.assert_called_once_with(self.path.read_text(), self.directory, "HEAD", "request")
+                runtime.assert_called_once_with(self.path.read_text(), str(self.directory), "HEAD", "request",
+                                                pr=None, provenance_remote=None)
                 self.assertEqual(code, 0 if status == "completed" else 1)
                 self.assertEqual(json.loads(stdout), {key: record[key] for key in
-                                                     ("run_id", "status", "run_ref", "notes_ref", "outputs")})
+                                                     ("run_id", "status", "repository", "run_ref", "notes_ref", "outputs")})
                 self.assertEqual(stderr, "" if status == "completed" else json.dumps(record["failure"]) + "\n")
+
+    def test_run_pr_and_provenance_options_are_forwarded(self):
+        with patch.object(cli, "Runtime") as runtime:
+            record = dict(run_id="id", status="completed", repository="owner/repo",
+                          run_ref="run", notes_ref="notes", outputs=[])
+            runtime.return_value.run.return_value = record
+            code, stdout, stderr = self.invoke(
+                "run", "--graph", self.path, "--repo", "owner/repo", "--pr", "8",
+                "--provenance-remote", "origin", "request")
+            runtime.assert_called_once_with(self.path.read_text(), "owner/repo", None, "request",
+                                            pr=8, provenance_remote="origin")
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout), record)
+            self.assertEqual(stderr, "")
+
+    def test_run_requires_exactly_one_commit_or_pr(self):
+        for source, diagnostic in [([], "required"),
+                                   (["--commit", "HEAD", "--pr", "8"], "not allowed")]:
+            with self.subTest(source=source), patch.object(cli, "Runtime") as runtime:
+                self.assert_input_error(self.invoke(
+                    "run", "--graph", self.path, "--repo", "owner/repo", *source, "request"),
+                    diagnostic)
+                runtime.assert_not_called()

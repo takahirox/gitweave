@@ -9,6 +9,30 @@ def require(condition, message):
         raise Failure("graph", message)
 
 
+def validate_sandbox(node, provider):
+    if "sandbox" in node:
+        require(provider == "codex", f"sandbox is unsupported for provider {provider!r}")
+        require(isinstance(node["sandbox"], str) and node["sandbox"] in
+                ("read-only", "workspace-write", "danger-full-access"),
+                "sandbox must be read-only, workspace-write, or danger-full-access")
+
+
+def validate_comment_config(cfg):
+    require(isinstance(cfg, dict), "Comment config must be an object")
+    require(set(cfg) <= {"repository", "number", "body", "body_path"}, "Unknown comment option")
+    repo = cfg.get("repository")
+    require(isinstance(repo, str) and bool(re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repo))
+            and repo.split("/")[1] not in (".", ".."), "Comment repository must be owner/name")
+    require(type(cfg.get("number")) is int and cfg["number"] > 0, "Comment number must be a positive integer")
+    require(("body" in cfg) != ("body_path" in cfg), "Specify exactly one of body or body_path")
+    if "body" in cfg:
+        require(isinstance(cfg["body"], str) and bool(cfg["body"].strip()), "Comment body must be nonblank text")
+    else:
+        path = cfg["body_path"]
+        require(isinstance(path, str) and bool(re.fullmatch(r"/(0|[1-9][0-9]*)/(message|data)(/.*)?", path))
+                and not re.search(r"~(?![01])", path), "body_path must select /<input-index>/message or /<input-index>/data[/...]")
+
+
 def validate_graph(graph):
     require(isinstance(graph, dict), "Graph must be an object")
     require(set(graph) <= {"version", "nodes", "flow", "concurrency", "max_steps", "retries", "timeout"}, "Unknown graph field")
@@ -16,33 +40,45 @@ def validate_graph(graph):
     for key, default, minimum in [("concurrency", 4, 1), ("max_steps", 100, 1), ("retries", 0, 0)]:
         value = graph.get(key, default)
         require(type(value) is int and value >= minimum, f"{key} must be an integer >= {minimum}")
-    timeout = graph.get("timeout", 600)
-    require(type(timeout) in (float, int) and math.isfinite(timeout) and timeout > 0, "timeout must be finite and positive")
+    if "timeout" in graph:
+        timeout = graph["timeout"]
+        require(type(timeout) in (float, int) and math.isfinite(timeout) and timeout > 0, "timeout must be finite and positive")
     nodes = graph.get("nodes")
     require(isinstance(nodes, dict) and bool(nodes), "nodes must be a nonempty object")
     for name, node in nodes.items():
         require(isinstance(name, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", name)), "Invalid node ID")
         require(isinstance(node, dict), f"{name}: node must be an object")
-        require(set(node) <= {"kind", "provider", "model", "effort", "instruction", "schema", "workspace_base", "action", "config"}, f"{name}: unknown node field")
+        require(set(node) <= {"kind", "provider", "model", "effort", "sandbox", "instruction", "schema", "workspace_base", "action", "config"}, f"{name}: unknown node field")
         require(node.get("kind") in ("agent", "action"), f"{name}: unknown kind")
         base = node.get("workspace_base")
         require(base == "run" or (type(base) is int and base >= 0), f"{name}: workspace_base must be 'run' or an input index")
         if node["kind"] == "agent":
             require(isinstance(node.get("provider"), str) and bool(node["provider"]), f"{name}: provider required")
+            validate_sandbox(node, node["provider"])
             require(isinstance(node.get("instruction"), str), f"{name}: instruction required")
             for option in ("model", "effort"):
                 require(option not in node or isinstance(node[option], str), f"{name}: {option} must be text")
         else:
-            require(node.get("action") in ("publish_pr", "merge_pr"), f"{name}: unknown action")
+            require("sandbox" not in node, f"{name}: sandbox is only supported on Codex agent nodes")
+            require(node.get("action") in ("publish_pr", "sync_pr", "merge_pr", "comment_issue", "comment_pr"), f"{name}: unknown action")
             cfg = node.get("config", {})
+            if node["action"] in ("comment_issue", "comment_pr"):
+                validate_comment_config(cfg)
+                if "schema" in node:
+                    check_schema(node["schema"])
+                continue
             require(isinstance(cfg, dict), f"{name}: config must be an object")
             require(set(cfg) <= {"repository", "base", "title", "body", "publish_node"}, f"{name}: unknown action option")
-            require(isinstance(cfg.get("repository"), str) and bool(re.fullmatch(r"[\w.-]+/[\w.-]+", cfg["repository"])), f"{name}: repository must be owner/name")
+            input_action = node["action"] == "sync_pr" or (node["action"] == "merge_pr" and "publish_node" not in cfg)
+            if input_action:
+                require(not cfg, f"{name}: input PR actions require empty config")
+            else:
+                require(isinstance(cfg.get("repository"), str) and bool(re.fullmatch(r"[\w.-]+/[\w.-]+", cfg["repository"])), f"{name}: repository must be owner/name")
             require("body" not in cfg or isinstance(cfg["body"], str), f"{name}: body must be text")
             if node["action"] == "publish_pr":
                 require(isinstance(cfg.get("base"), str) and bool(cfg["base"]) and not cfg["base"].startswith("-"), f"{name}: base branch required")
                 require(isinstance(cfg.get("title"), str) and bool(cfg["title"]), f"{name}: title required")
-            else:
+            elif not input_action:
                 require(isinstance(cfg.get("publish_node"), str), f"{name}: publish_node must be a node ID")
                 pub = nodes.get(cfg["publish_node"], {})
                 require(isinstance(pub, dict) and isinstance(pub.get("config"), dict), f"{name}: invalid publisher")

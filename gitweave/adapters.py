@@ -6,19 +6,12 @@ import signal
 import subprocess
 import tempfile
 from .model import Failure, Result
-
-
-def agent_environment():
-    # Preserve native agent login locations, but do not forward publication authority.
-    allowed = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TEMP", "TMP",
-               "LANG", "LC_ALL", "TERM", "CODEX_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
-               "OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
-    return {k: v for k, v in os.environ.items() if k in allowed}
+from .graph import validate_sandbox
 
 
 def process(command, prompt, cwd, timeout):
     try:
-        child = subprocess.Popen(command, cwd=cwd, env=agent_environment(), stdin=subprocess.PIPE,
+        child = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                  start_new_session=True)
     except OSError as exc:
@@ -115,6 +108,11 @@ class CLIAdapter:
         self.provider = provider
 
     def run(self, node, context, workspace, timeout):
+        if self.provider not in ("codex", "claude"):
+            raise Failure("configuration", f"Unsupported CLI provider: {self.provider!r}")
+        if "provider" in node and node["provider"] != self.provider:
+            raise Failure("configuration", "Node provider does not match CLI adapter")
+        validate_sandbox(node, self.provider)
         prompt = ("You are executing a GitWeave node. The assigned working directory is the official "
                   "artifact boundary. Leave final files there. Do not modify the original checkout or "
                   "other worktrees. Do not publish, push, or merge remote branches. Do not reset usage "
@@ -128,7 +126,8 @@ class CLIAdapter:
                 schema = {"type": "object", "properties": {"message": {"type": "string"}, "data": node["schema"]},
                           "required": ["message", "data"], "additionalProperties": False}
             if self.provider == "codex":
-                command = ["codex", "exec", "--json", "--sandbox", "workspace-write", "-C", str(workspace)]
+                command = ["codex", "exec", "--json", "--sandbox",
+                           node.get("sandbox", "danger-full-access"), "-C", str(workspace)]
                 if node.get("effort"):
                     command += ["-c", "model_reasoning_effort=" + json.dumps(node["effort"])]
                 if schema:

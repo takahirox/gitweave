@@ -1,8 +1,12 @@
-"""Explicit GitHub publication and merge operations, separate from agents."""
+"""Explicit GitHub publication, comment and merge operations, separate from agents."""
+import hashlib
 import json
+import os
+import re
 import subprocess
 import threading
-from .model import Failure, Result
+from .graph import validate_comment_config
+from .model import Failure, Result, pointer
 
 
 class GitHubActions:
@@ -10,21 +14,192 @@ class GitHubActions:
         self.git = git
         self.run_id = run_id
         self.published = {}
+        self.publish_bases = {}
+        self.input_pr = None
+        self.remote_sha = None
         self.lock = threading.Lock()
 
     def gh(self, *args):
         try:
             reply = subprocess.run(["gh", *args], cwd=self.git.repo, text=True,
-                                   capture_output=True, timeout=120)
+                                   capture_output=True, timeout=120,
+                                   env=dict(os.environ, GH_HOST="github.com"))
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise Failure("github", str(exc), retryable=True) from exc
         if reply.returncode:
             raise Failure("github", reply.stderr.strip(), retryable=True)
         return reply.stdout.strip()
 
+    def read_pr(self, repository, number):
+        raw = json.loads(self.gh("api", f"repos/{repository}/pulls/{number}"))
+        head, base = raw["head"], raw["base"]
+        return {"number": raw["number"], "repository": base["repo"]["full_name"],
+                "repository_id": base["repo"]["id"],
+                "head_repository": (head.get("repo") or {}).get("full_name"),
+                "head_repository_id": (head.get("repo") or {}).get("id"),
+                "head_branch": head["ref"], "head_sha": head["sha"],
+                "base_branch": base["ref"], "base_sha": base["sha"],
+                "state": "MERGED" if raw["merged"] else raw["state"].upper(),
+                "url": raw["html_url"], "merge_commit": raw.get("merge_commit_sha")}
+
+    def resolve_input(self, repository, number):
+        pr = self.read_pr(repository, number)
+        if pr["state"] != "OPEN" or pr["number"] != number:
+            raise Failure("pr_input", "Input PR must be open and match the requested number")
+        if pr["repository"].lower() != repository.lower():
+            raise Failure("pr_input", "Input repository identity changed")
+        for key in ("head_sha", "base_sha"):
+            if not re.fullmatch(r"[0-9a-f]{40}", pr[key]):
+                raise Failure("pr_input", "GitHub returned an invalid commit SHA")
+        remote = f"https://github.com/{pr['repository']}.git"
+        # Fetch GitHub's PR head, never its synthetic test-merge commit.
+        self.git.command("-c", "credential.helper=!gh auth git-credential", "fetch", "--no-tags",
+                         remote, f"refs/pull/{number}/head")
+        if self.git.resolve("FETCH_HEAD") != pr["head_sha"]:
+            raise Failure("publication_conflict", "PR head moved while fetching input")
+        self.git.command("update-ref", f"refs/gitweave/{self.run_id}/input/head", pr["head_sha"])
+        self.git.command("-c", "credential.helper=!gh auth git-credential", "fetch", "--no-tags",
+                         remote, pr["base_sha"])
+        if self.git.resolve("FETCH_HEAD") != pr["base_sha"]:
+            raise Failure("publication_conflict", "Fetched base does not match input")
+        self.git.command("update-ref", f"refs/gitweave/{self.run_id}/input/base", pr["base_sha"])
+        if self.read_pr(repository, number) != pr:
+            raise Failure("publication_conflict", "PR changed while fetching input")
+        self.input_pr = pr
+        self.remote_sha = pr["head_sha"]
+        return dict(pr)
+
+    def check_input(self, *, allow_merged=False):
+        if self.input_pr is None:
+            raise Failure("pr_input", "This action requires an existing-PR Run input")
+        original = self.input_pr
+        pr = self.read_pr(original["repository"], original["number"])
+        identity = ("number", "repository", "repository_id", "head_repository",
+                    "head_repository_id", "head_branch", "base_branch")
+        if any(pr[key] != original[key] for key in identity):
+            raise Failure("publication_conflict", "PR identity, head branch, or base branch changed")
+        if pr["state"] != "OPEN" and not (allow_merged and pr["state"] == "MERGED"):
+            raise Failure("publication_conflict", "Input PR is closed")
+        return pr
+
+    def writable_input(self):
+        pr = self.input_pr
+        if pr["head_repository_id"] != pr["repository_id"]:
+            raise Failure("pr_input", "Cross-repository PR heads are read-only; mutation is unsupported")
+        repo = json.loads(self.gh("api", f"repos/{pr['repository']}"))
+        if repo.get("id") != pr["repository_id"] or not repo.get("permissions", {}).get("push"):
+            raise Failure("pr_input", "Input PR repository is not writable")
+
+    def sync_input(self, context):
+        pr = self.check_input()
+        self.writable_input()
+        commit = context["workspace_base"]
+        expected = self.remote_sha
+        if pr["head_sha"] not in (expected, commit):
+            raise Failure("publication_conflict", "PR head changed externally")
+        remote = f"https://github.com/{pr['head_repository']}.git"
+        ref = f"refs/heads/{pr['head_branch']}"
+        self.git.command("check-ref-format", ref)
+        current = self.git.command("-c", "credential.helper=!gh auth git-credential",
+                                   "ls-remote", remote, ref).split()
+        current = current[0] if current else ""
+        if current not in (expected, commit):
+            raise Failure("publication_conflict", "PR branch changed externally")
+        if current != commit:
+            self.git.command("-c", "credential.helper=!gh auth git-credential", "push",
+                             f"--force-with-lease={ref}:{expected}", remote, f"{commit}:{ref}")
+        # A retry recognizes the exact commit if a successful push timed out.
+        after = self.check_input()
+        if after["head_sha"] != commit:
+            raise Failure("publication_conflict", "PR changed during synchronization")
+        self.remote_sha = commit
+        return Result(message="Synchronized input PR", data={"url": pr["url"],
+                      "branch": pr["head_branch"], "commit": commit})
+
+    def merge_exact(self, repository, number, expected, pr):
+        if pr["state"] == "MERGED":
+            return Result(message="PR already merged", data={"merged": True, "url": pr["url"],
+                          "merge_commit": pr.get("merge_commit")})
+        if pr["state"] != "OPEN":
+            raise Failure("publication_conflict", "PR is closed")
+        # REST merges immediately or rejects; unlike `gh pr merge`, it cannot queue.
+        reply = json.loads(self.gh("api", "--method", "PUT",
+                                  f"repos/{repository}/pulls/{number}/merge",
+                                  "-f", f"sha={expected}", "-f", "merge_method=merge"))
+        if reply.get("merged") is not True:
+            raise Failure("merge_policy", reply.get("message", "GitHub rejected the merge"))
+        return Result(message="PR merged", data={"merged": True, "url": pr["url"],
+                      "merge_commit": reply.get("sha")})
+
+    def check_artifact(self, context, expected):
+        actual_tree = self.git.command("rev-parse", f"{context['workspace_base']}^{{tree}}")
+        if actual_tree != self.git.command("rev-parse", f"{expected}^{{tree}}"):
+            raise Failure("publication_conflict", "Selected artifact has unpublished changes; synchronize before merge")
+
+    def comment(self, node_id, node, context):
+        cfg = node.get("config", {})
+        validate_comment_config(cfg)
+        body = cfg["body"] if "body" in cfg else pointer(context.get("inputs", []), cfg["body_path"])
+        if not isinstance(body, str) or not body.strip():
+            raise Failure("result", "Comment body must be nonblank text")
+        instance = context.get("instance_id")
+        if not isinstance(instance, str) or not instance:
+            raise Failure("action", "Comment actions require runtime instance_id")
+        identity = json.dumps([self.run_id, node_id, instance], separators=(",", ":"))
+        marker = f"<!-- gitweave-comment:{hashlib.sha256(identity.encode()).hexdigest()} -->"
+        repo, number = cfg["repository"], cfg["number"]
+        endpoint = f"repos/{repo}/issues/{number}"
+
+        def read(*args):
+            try:
+                return json.loads(self.gh("api", *args))
+            except json.JSONDecodeError as exc:
+                raise Failure("github", "Invalid GitHub comment response", retryable=True) from exc
+
+        def result(comment):
+            if (not isinstance(comment, dict) or type(comment.get("id")) is not int
+                    or comment["id"] <= 0 or not isinstance(comment.get("html_url"), str)
+                    or not comment["html_url"]):
+                raise Failure("github", "Missing GitHub comment ID/URL", retryable=True)
+            return Result(message="Posted GitHub comment", data={"id": comment["id"],
+                          "url": comment["html_url"], "repository": repo, "number": number})
+
+        target = read(endpoint)
+        if (not isinstance(target, dict) or type(target.get("number")) is not int
+                or target["number"] != number
+                or ("pull_request" in target) != (node["action"] == "comment_pr")):
+            raise Failure("comment_target", "GitHub target does not match the requested Issue/PR")
+        # Explicit pages avoid concatenated JSON documents from gh --paginate.
+        # Never PATCH a comment: reconciliation only returns this invocation's post.
+        page = 1
+        while True:
+            comments = read(f"{endpoint}/comments?per_page=100&page={page}")
+            if not isinstance(comments, list) or any(not isinstance(c, dict) for c in comments):
+                raise Failure("github", "Invalid GitHub comments page", retryable=True)
+            for comment in comments:
+                text = comment.get("body")
+                if isinstance(text, str) and text.endswith("\n\n" + marker):
+                    return result(comment)
+            if len(comments) < 100:
+                break
+            page += 1
+        return result(read("--method", "POST", endpoint + "/comments", "-f", f"body={body}\n\n{marker}"))
+
     def run(self, node_id, node, context):
         with self.lock:
-            cfg = node["config"]
+            cfg = node.get("config", {})
+            if node["action"] in ("comment_issue", "comment_pr"):
+                return self.comment(node_id, node, context)
+            if node["action"] == "sync_pr":
+                return self.sync_input(context)
+            if node["action"] == "merge_pr" and "publish_node" not in cfg:
+                pr = self.check_input(allow_merged=True)
+                if pr["head_sha"] != self.remote_sha:
+                    raise Failure("publication_conflict", "PR head differs from the known remote artifact")
+                self.check_artifact(context, self.remote_sha)
+                if pr["state"] != "MERGED":
+                    self.writable_input()
+                return self.merge_exact(pr["repository"], pr["number"], self.remote_sha, pr)
             repo = cfg["repository"]
             publisher = node_id if node["action"] == "publish_pr" else cfg["publish_node"]
             branch = f"gitweave/{self.run_id}/{publisher}"
@@ -45,6 +220,7 @@ class GitHubActions:
                     self.git.command("-c", "credential.helper=!gh auth git-credential", "push",
                                      f"--force-with-lease={remote_ref}:{expected}", remote, f"{commit}:{remote_ref}")
                 self.published[publisher] = commit
+                self.publish_bases[publisher] = cfg["base"]
                 if prs:
                     pr = prs[0]
                     self.gh("pr", "edit", str(pr["number"]), "--repo", repo,
@@ -58,16 +234,11 @@ class GitHubActions:
             if not expected:
                 raise Failure("approval", "Publisher has not executed in this Run")
             pr = json.loads(self.gh("pr", "view", branch, "--repo", repo, "--json",
-                                   "number,state,reviewDecision,headRefOid,url,mergeCommit"))
+                                   "number,state,headRefOid,url,mergeCommit,baseRefName"))
             if pr["headRefOid"] != expected:
                 raise Failure("publication_conflict", "PR head differs from the published artifact")
-            if pr["state"] != "MERGED":
-                if pr["state"] != "OPEN" or pr["reviewDecision"] != "APPROVED":
-                    # Approval absence is a task outcome, so the graph can route or finish.
-                    return Result(message="PR is not approved", data={"merged": False, "url": pr["url"]})
-                self.gh("pr", "merge", str(pr["number"]), "--repo", repo,
-                        "--squash", "--match-head-commit", expected)
-                pr = json.loads(self.gh("pr", "view", str(pr["number"]), "--repo", repo,
-                                       "--json", "state,mergeCommit,url"))
-            return Result(message="PR merge checked", data={"merged": pr["state"] == "MERGED",
-                          "url": pr["url"], "merge_commit": (pr.get("mergeCommit") or {}).get("oid")})
+            if pr["baseRefName"] != self.publish_bases[publisher]:
+                raise Failure("publication_conflict", "Managed PR base changed")
+            self.check_artifact(context, expected)
+            pr["merge_commit"] = (pr.get("mergeCommit") or {}).get("oid")
+            return self.merge_exact(repo, pr["number"], expected, pr)
