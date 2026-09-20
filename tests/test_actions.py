@@ -163,7 +163,7 @@ class ActionTests(unittest.TestCase):
             target = {"number": 42}
             if action == "comment_pr":
                 target["pull_request"] = {}
-            self.actions.gh.side_effect = [json.dumps(target), "[]", json.dumps({"id": 7, "html_url": "comment"})]
+            self.actions.gh.side_effect = [json.dumps(target), json.dumps({"id": 7, "html_url": "comment"})]
             self.actions.run("comment", {"action": action, "config": {
                 "repository": "other/repository", "number": 42, "body": "Findings"}},
                 dict(self.context, instance_id=action))

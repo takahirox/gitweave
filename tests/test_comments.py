@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from gitweave.actions import GitHubActions
 from gitweave.graph import validate_graph
@@ -15,7 +15,6 @@ class CommentTests(unittest.TestCase):
     def setUp(self):
         self.git = Mock()
         self.actions = GitHubActions(self.git, "run")
-        self.comments = []
         self.posts = []
         self.target = {"number": 9}
         self.lose_response = False
@@ -29,14 +28,10 @@ class CommentTests(unittest.TestCase):
             body = args[-1].removeprefix("body=")
             self.posts.append(body)
             comment = {"id": len(self.posts), "html_url": f"https://github.com/owner/repo/issues/9#issuecomment-{len(self.posts)}", "body": body}
-            self.comments.append(comment)
             if self.lose_response:
                 self.lose_response = False
                 raise Failure("github", "response lost", retryable=True)
             return json.dumps(comment)
-        if "/comments?" in args[-1]:
-            page = int(args[-1].split("page=")[-1])
-            return json.dumps(self.comments[(page - 1) * 100:page * 100])
         return json.dumps(self.target)
 
     def run_comment(self):
@@ -52,13 +47,18 @@ class CommentTests(unittest.TestCase):
                         self.target["pull_request"] = {"url": "pr"}
                     if source == "literal":
                         self.node["config"].pop("body_path")
-                        self.node["config"]["body"] = "$(do not execute) {{literal}}"
+                        self.node["config"]["body"] = "  $(do not execute) {{literal}}\n\nText\n"
                         expected = self.node["config"]["body"]
                     else:
                         self.node["config"]["body_path"] = "/0/" + source
                         expected = "Human findings" if source == "message" else "Structured findings"
                     result = self.run_comment()
-                    self.assertTrue(self.posts[0].startswith(expected + "\n\n<!-- gitweave-comment:"))
+                    self.assertEqual(self.posts, [expected])
+                    self.assertEqual(self.actions.gh.call_args_list, [
+                        call("api", "repos/owner/repo/issues/9"),
+                        call("api", "--method", "POST", "repos/owner/repo/issues/9/comments",
+                             "-f", f"body={expected}"),
+                    ])
                     self.assertEqual(result.data["id"], 1)
                     self.assertIn("#issuecomment-1", result.data["url"])
                     self.git.command.assert_not_called()
@@ -104,7 +104,7 @@ class CommentTests(unittest.TestCase):
             self.run_comment()
         self.actions.gh.assert_not_called()
 
-    def test_target_type_number_and_missing_instance_rejected(self):
+    def test_target_type_and_number_rejected(self):
         for action, target in (("comment_pr", {"number": 9}),
                                ("comment_issue", {"number": 9, "pull_request": {}}),
                                ("comment_issue", {"number": 10}), ("comment_issue", {})):
@@ -113,68 +113,57 @@ class CommentTests(unittest.TestCase):
             with self.assertRaises(Failure):
                 self.run_comment()
         self.assertEqual(self.posts, [])
-        self.actions.gh.reset_mock()
-        self.context.pop("instance_id")
-        with self.assertRaisesRegex(Failure, "instance_id"):
-            self.run_comment()
-        self.actions.gh.assert_not_called()
 
-    def test_lost_success_reconciles_later_page_and_distinct_instances_post(self):
+    def test_comments_do_not_require_instance_identity(self):
+        self.context.pop("instance_id")
+        self.assertEqual(self.run_comment().data, {
+            "id": 1, "url": "https://github.com/owner/repo/issues/9#issuecomment-1",
+            "repository": "owner/repo", "number": 9})
+
+    def test_each_invocation_posts_including_after_lost_response(self):
         for action in ("comment_issue", "comment_pr"):
             with self.subTest(action=action):
                 self.setUp()
                 self.node["action"] = action
                 if action == "comment_pr":
                     self.target["pull_request"] = {}
-                self.comments = [{"id": 1000 + i, "body": "Human comment", "html_url": "human"} for i in range(100)]
-                humans = copy.deepcopy(self.comments)
                 self.lose_response = True
                 with self.assertRaises(Failure) as error:
                     self.run_comment()
                 self.assertTrue(error.exception.retryable)
-                # No in-memory publication state is required for reconciliation.
-                self.actions = GitHubActions(self.git, "run")
-                self.actions.gh = Mock(side_effect=self.github)
-                self.assertEqual(self.run_comment().data["id"], 1)
-                self.assertEqual(len(self.posts), 1)
-                self.assertTrue(any("page=2" in c.args[-1] for c in self.actions.gh.call_args_list))
-                self.context["instance_id"] = "comment-2"
                 self.assertEqual(self.run_comment().data["id"], 2)
-                self.assertEqual(self.run_comment().data["id"], 2)
-                self.assertEqual(len(self.posts), 2)
-                self.assertNotEqual(self.posts[0], self.posts[1])
-                self.assertEqual(self.comments[:100], humans)
-                self.assertFalse(any("PATCH" in c.args for c in self.actions.gh.call_args_list))
+                self.assertEqual(self.run_comment().data["id"], 3)
+                self.assertEqual(self.posts, ["Human findings"] * 3)
+                self.assertEqual(self.actions.gh.call_count, 6)
 
-    def test_failures_before_post_and_malformed_success_retry(self):
-        real = self.github
-        for failed_call in (1, 2, 3):
-            self.setUp()
-            calls = 0
-            def fail(*args):
-                nonlocal calls
-                calls += 1
-                if calls == failed_call:
-                    raise Failure("github", "unavailable", retryable=True)
-                return real(*args)
-            self.actions.gh.side_effect = fail
-            with self.assertRaises(Failure):
-                self.run_comment()
-            self.actions.gh.side_effect = real
-            self.assertEqual(self.run_comment().data["id"], 1)
-            self.assertEqual(len(self.posts), 1)
-        for response in ("", "{", "{}"):
-            self.setUp()
-            def malformed(*args):
-                reply = real(*args)
-                return response if "POST" in args else reply
-            self.actions.gh.side_effect = malformed
-            with self.assertRaises(Failure) as error:
-                self.run_comment()
-            self.assertTrue(error.exception.retryable)
-            self.actions.gh.side_effect = real
-            self.assertEqual(self.run_comment().data["id"], 1)
-            self.assertEqual(len(self.posts), 1)
+    def test_request_failures_reported_without_internal_retry(self):
+        for failed_call in (1, 2):
+            with self.subTest(failed_call=failed_call):
+                self.setUp()
+                failure = Failure("github", "unavailable", retryable=True)
+                self.actions.gh.side_effect = ([json.dumps(self.target)] * (failed_call - 1)
+                                               + [failure])
+                with self.assertRaises(Failure) as error:
+                    self.run_comment()
+                self.assertIs(error.exception, failure)
+                self.assertEqual(self.actions.gh.call_count, failed_call)
+
+    def test_malformed_success_reported_and_next_invocation_posts(self):
+        for response in ("", "{", "{}", "[]", '{"id": true, "html_url": "url"}',
+                         '{"id": 0, "html_url": "url"}', '{"id": 1, "html_url": ""}'):
+            with self.subTest(response=response):
+                self.setUp()
+                def malformed(*args):
+                    reply = self.github(*args)
+                    return response if "POST" in args else reply
+                self.actions.gh.side_effect = malformed
+                with self.assertRaises(Failure) as error:
+                    self.run_comment()
+                self.assertTrue(error.exception.retryable)
+                self.assertEqual(self.actions.gh.call_count, 2)
+                self.actions.gh.side_effect = self.github
+                self.assertEqual(self.run_comment().data["id"], 2)
+                self.assertEqual(self.posts, ["Human findings"] * 2)
 
     def test_runtime_owned_transport_credentials(self):
         action = GitHubActions(self.git, "run")
