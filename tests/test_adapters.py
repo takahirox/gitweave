@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from gitweave.adapters import CLIAdapter, agent_environment, normalize, process
+from gitweave.adapters import CLIAdapter, normalize, process
 from gitweave.model import Failure
 
 
@@ -31,6 +31,14 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(Failure):
             normalize("codex", '{"type":"thread.started"}')
 
+    def assert_environment_inherited(self, parent):
+        with patch.dict(os.environ, parent, clear=True), tempfile.TemporaryDirectory() as cwd:
+            code, stdout, stderr = process(
+                ["/usr/bin/env"], "", cwd, 10)
+            self.assertEqual(code, 0, stderr)
+            self.assertEqual(dict(line.split("=", 1) for line in stdout.splitlines()), parent)
+            self.assertEqual(dict(os.environ), parent)
+
     def test_environment_inherits_development_and_native_authentication(self):
         keys = (
             "PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "LANG", "LC_CTYPE",
@@ -47,10 +55,9 @@ class AdapterTests(unittest.TestCase):
             "GIT_LFS_SKIP_SMUDGE", "GIT_OPTIONAL_LOCKS", "GH_PAGER", "SSH_TTY",
         )
         parent = {key: "fake-" + key for key in keys}
-        with patch.dict(os.environ, parent, clear=True):
-            self.assertEqual(agent_environment(), parent)
+        self.assert_environment_inherited(parent)
 
-    def test_environment_excludes_authority_families(self):
+    def test_environment_inherits_github_ssh_and_git_families(self):
         families = {
             "github": (
                 "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
@@ -80,32 +87,7 @@ class AdapterTests(unittest.TestCase):
             with self.subTest(family=family):
                 parent = {key: "fake-authority" for key in keys}
                 parent["CUSTOM_TOOLCHAIN_SETTING"] = "fake-development"
-                with patch.dict(os.environ, parent, clear=True):
-                    self.assertEqual(agent_environment(), {"CUSTOM_TOOLCHAIN_SETTING": "fake-development"})
-                    self.assertEqual(dict(os.environ), parent)
-
-    def test_environment_is_an_independent_copy(self):
-        parent = {"GH_TOKEN": "fake-runtime", "HOME": "/fake/home", "CUSTOM": "fake-dev"}
-        with patch.dict(os.environ, parent, clear=True):
-            child = agent_environment()
-            child["HOME"] = "/fake/child"
-            child["NEW"] = "fake-new"
-            del child["CUSTOM"]
-            self.assertEqual(dict(os.environ), parent)
-            self.assertEqual(agent_environment(), {"HOME": "/fake/home", "CUSTOM": "fake-dev"})
-
-    def test_process_passes_filtered_environment_to_child(self):
-        parent = {"GH_TOKEN": "fake-runtime", "SSH_AUTH_SOCK": "/fake/socket",
-                  "CUSTOM_TOOLCHAIN": "fake-toolchain", "CLAUDE_CODE_OAUTH_TOKEN": "fake-native"}
-        with patch.dict(os.environ, parent, clear=True):
-            with patch("gitweave.adapters.subprocess.Popen") as popen:
-                popen.return_value.communicate.return_value = ("fake-output", "")
-                popen.return_value.returncode = 0
-                self.assertEqual(process(["fake-agent"], "prompt", "/fake/workspace", 10),
-                                 (0, "fake-output", ""))
-            self.assertEqual(popen.call_args.kwargs["env"], {
-                "CUSTOM_TOOLCHAIN": "fake-toolchain", "CLAUDE_CODE_OAUTH_TOKEN": "fake-native"})
-            self.assertEqual(dict(os.environ), parent)
+                self.assert_environment_inherited(parent)
 
     def test_commands_use_native_cli_and_structured_envelope(self):
         for provider in ("codex", "claude"):
@@ -126,7 +108,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "timeout")
         self.assertIn("partial", raised.exception.result.raw_stdout)
 
-    def test_sandbox_commands_preserve_boundary_and_credentials(self):
+    def test_sandbox_commands_preserve_boundary_and_inherit_environment(self):
         parent = {"HOME": "/fake/home", "CODEX_HOME": "/fake/codex",
                   "OPENAI_API_KEY": "fake-native", "GH_TOKEN": "fake-system-action",
                   "GITHUB_TOKEN": "fake-github", "SSH_AUTH_SOCK": "/fake/socket",
@@ -151,8 +133,7 @@ class AdapterTests(unittest.TestCase):
                     self.assertEqual(command, ["claude", "-p", "--output-format", "stream-json",
                                                "--verbose", "--permission-mode", "acceptEdits"])
                 self.assertEqual(popen.call_args.kwargs["cwd"], Path("/fake/worktree"))
-                self.assertEqual(popen.call_args.kwargs["env"],
-                                 {key: parent[key] for key in ("HOME", "CODEX_HOME", "OPENAI_API_KEY")})
+                self.assertNotIn("env", popen.call_args.kwargs)
                 self.assertEqual(dict(os.environ), parent)
                 prompt = popen.return_value.communicate.call_args.args[0]
                 self.assertIn("official artifact boundary", prompt)
