@@ -1,14 +1,11 @@
 """Persist one Run's refs and notes with ordinary Git push semantics."""
-import json
 from .model import Failure
 
 
 def destination(git, record, remote=None):
     if remote is not None:
         return remote
-    graph = json.loads(record.get("graph", "{}"))
-    repositories = {n["config"]["repository"] for n in graph.get("nodes", {}).values()
-                    if n.get("action") == "publish_pr"}
+    repositories = set(record.get("publication_repositories", []))
     if record.get("input_pr"):
         repositories.add(record["input_pr"]["repository"])
     if len(repositories) > 1:

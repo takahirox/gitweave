@@ -192,6 +192,8 @@ class PersistenceTests(unittest.TestCase):
         git(self.repo, "remote", "add", "origin", str(self.remote))
         self.assertEqual(destination(storage, {}), "origin")
         record = {"graph": graph({"p": {"action": "publish_pr", "config": {"repository": "owner/artifact"}}}, [])}
+        self.assertEqual(destination(storage, record), "origin")
+        record["publication_repositories"] = ["owner/artifact"]
         self.assertEqual(destination(storage, record), "https://github.com/owner/artifact.git")
         self.assertEqual(destination(storage, record, "origin"), "origin")
         record["input_pr"] = {"repository": "other/repo"}
@@ -199,6 +201,78 @@ class PersistenceTests(unittest.TestCase):
             destination(storage, record)
         self.assertEqual(destination(storage, record, "git@example.test:repo.git"), "git@example.test:repo.git")
         self.assertEqual(destination(storage, {"input_pr": record["input_pr"]}), "https://github.com/other/repo.git")
+
+    def test_actual_publication_destinations(self):
+        def publish(repository):
+            return dict(kind="action", action="publish_pr", workspace_base=0,
+                        config={"repository": repository, "base": "main", "title": "PR"})
+
+        nodes = {"route": node(schema={"type": "boolean"}),
+                 "a": publish("owner/a"), "b": publish("owner/b"),
+                 "same": publish("owner/a")}
+        conditional = ["route", {"if": {"condition": {"path": "/0/data", "equals": True},
+                                        "then": ["a"], "else": ["b"]}}]
+        cases = [
+            ("selected then", conditional, True, None, None, None, ["a"], "owner/a"),
+            ("selected else", conditional, False, None, None, None, ["b"], "owner/b"),
+            ("unreachable", ["route"], True, None, None, None, [], None),
+            ("failed invocation", ["a", "b"], True, "a", None, None, ["a"], "owner/a"),
+            ("failure before invocation", ["route", "a"], True, "route", None, None, [], None),
+            ("repeated target", ["a", "same"], True, None, None, None, ["a", "same"], "owner/a"),
+            ("parallel targets", [{"parallel": [["a"], ["b"]]}], True, None, None, None, ["a", "b"], "ambiguous"),
+            ("multiple actual", ["a", "b"], True, None, None, None, ["a", "b"], "ambiguous"),
+            ("failed second target", ["a", "b"], True, "b", None, None, ["a", "b"], "ambiguous"),
+            ("override", ["a", "b"], True, None, None, "chosen", ["a", "b"], "chosen"),
+            ("input only", ["route"], True, None, "owner/input", None, [], "owner/input"),
+            ("input matches", ["a"], True, None, "owner/a", None, ["a"], "owner/a"),
+            ("input differs", ["a"], True, None, "owner/input", None, ["a"], "ambiguous"),
+            ("input override", ["a"], True, None, "owner/input", "chosen", ["a"], "chosen"),
+        ]
+        for label, flow, selected, failed, input_repo, override, invoked, expected in cases:
+            with self.subTest(label=label):
+                def work(*args):
+                    if failed == "route":
+                        raise Failure("test", "route failed")
+                    return Result(data=selected)
+
+                def action(name, node, context):
+                    if name == failed:
+                        raise Failure("test", "publication failed", retryable=True)
+                    return Result()
+
+                actions = Mock()
+                actions.remote_sha = None
+                actions.run.side_effect = action
+                actions.resolve_input.return_value = {"repository": input_repo, "head_sha": self.base}
+                # Use local objects for the existing-PR input; no GitHub fetches.
+                with patch("gitweave.runtime.Git",
+                           side_effect=lambda repo, run_id, **kw: Git(self.repo, run_id)):
+                    run = Runtime(graph(nodes, flow, retries=1), input_repo or self.repo,
+                                  None if input_repo else self.base, "request",
+                                  pr=1 if input_repo else None, actions=actions,
+                                  adapters={"fake": Fake(work)}, provenance_remote=override)
+                storage = run.git
+                with patch("gitweave.runtime.persist") as push:
+                    if expected == "ambiguous":
+                        with self.assertRaisesRegex(Failure, "Multiple artifact"):
+                            run.run()
+                        push.assert_not_called()
+                    else:
+                        record = run.run()
+                        target = ("https://github.com/" + expected + ".git"
+                                  if expected and expected != "chosen" else expected)
+                        self.assertEqual(record["provenance_destination"], target)
+                        if target:
+                            push.assert_called_once_with(storage, target)
+                        else:
+                            push.assert_not_called()
+                expected_calls = [name for name in invoked for _ in range(2 if name == failed else 1)]
+                self.assertCountEqual([c.args[0] for c in actions.run.call_args_list], expected_calls)
+                self.assertEqual(run.record["status"], "failed" if failed else "completed")
+                self.assertEqual(run.record["publication_repositories"],
+                                 sorted({nodes[name]["config"]["repository"] for name in invoked}))
+                stored = json.loads(git(self.repo, "show", run.record["run_ref"] + ":run.json"))
+                self.assertEqual(stored, run.record)
 
     def test_transfer_error_preserves_git_diagnostic_and_local_refs(self):
         run = self.run_local()
