@@ -89,6 +89,75 @@ class GitRepositoryTests(unittest.TestCase):
         self.base = self.git.commit(self.git.command("mktree", input=""), [], "base")
         self.worktree = self.root / "worktree"
 
+    def test_checkpoint_accepts_unrelated_final_head(self):
+        self.git.add_worktree(self.worktree, self.base)
+        unrelated = self.git.commit(self.git.command("mktree", input=""), [], "unrelated root")
+        self.git.command("reset", "--hard", unrelated, cwd=self.worktree)
+        (self.worktree / "artifact.txt").write_text("final artifact\n")
+
+        commit = self.git.checkpoint(self.worktree, self.base, "checkpoint")
+
+        self.assertEqual(self.git.command("rev-list", "--parents", "-n", "1", commit),
+                         f"{commit} {unrelated}")
+        self.assertEqual(self.git.command("show", f"{commit}:artifact.txt"), "final artifact")
+        self.assertNotIn(self.base, self.git.command("rev-list", commit).splitlines())
+        record = {"status": "completed", "workspace_base": self.base, "output_commit": commit}
+        self.git.retain(commit, "attempts/test/1", record)
+        self.assertEqual(self.git.command("rev-parse", "refs/gitweave/test/attempts/test/1"), commit)
+        self.assertEqual(json.loads(self.git.command("notes", f"--ref={self.git.notes}", "show", commit)),
+                         record)
+        self.assertEqual(self.git.command("rev-parse", "HEAD", cwd=self.worktree), unrelated)
+
+    def test_checkpoint_captures_files_with_unresolved_merge_index(self):
+        self.git.add_worktree(self.worktree, self.base)
+        artifact = self.worktree / "artifact.txt"
+        removed = self.worktree / "removed.txt"
+        artifact.write_text("base\n")
+        removed.write_text("remove me\n")
+        self.git.command("add", ".", cwd=self.worktree)
+        self.git.command("commit", "-m", "base files", cwd=self.worktree)
+        base = self.git.command("rev-parse", "HEAD", cwd=self.worktree)
+        artifact.write_text("other side\n")
+        self.git.command("commit", "-am", "other", cwd=self.worktree)
+        other = self.git.command("rev-parse", "HEAD", cwd=self.worktree)
+        self.git.command("reset", "--hard", base, cwd=self.worktree)
+        artifact.write_text("agent side\n")
+        self.git.command("commit", "-am", "agent", cwd=self.worktree)
+        head = self.git.command("rev-parse", "HEAD", cwd=self.worktree)
+        with self.assertRaises(Failure):
+            self.git.command("merge", other, cwd=self.worktree)
+        self.assertTrue(self.git.command("ls-files", "--unmerged", cwd=self.worktree))
+        index = Path(self.git.command("rev-parse", "--git-path", "index", cwd=self.worktree))
+        merge_head = Path(self.git.command("rev-parse", "--git-path", "MERGE_HEAD", cwd=self.worktree))
+        index_before = index.read_bytes()
+        merge_before = merge_head.read_bytes()
+        conflicted_contents = artifact.read_text()
+        self.assertIn("<<<<<<<", conflicted_contents)
+        removed.unlink()
+        (self.worktree / "new.txt").write_text("untracked\n")
+
+        for contents in (conflicted_contents, "resolved on disk without staging\n"):
+            with self.subTest(contents=contents):
+                artifact.write_text(contents)
+                commit = self.git.checkpoint(self.worktree, base, "checkpoint")
+                self.assertEqual(self.git.command("show", f"{commit}:artifact.txt"), contents.strip())
+                self.assertEqual(self.git.command("show", f"{commit}:new.txt"), "untracked")
+                self.assertEqual(self.git.command("ls-tree", "--name-only", commit).splitlines(),
+                                 ["artifact.txt", "new.txt"])
+                self.assertEqual(self.git.command("rev-list", "--parents", "-n", "1", commit),
+                                 f"{commit} {head} {other}")
+                self.assertEqual(self.git.command("rev-parse", "HEAD", cwd=self.worktree), head)
+                self.assertEqual(index.read_bytes(), index_before)
+                self.assertEqual(merge_head.read_bytes(), merge_before)
+
+    def test_checkpoint_requires_assigned_worktree_root(self):
+        self.git.add_worktree(self.worktree, self.base)
+        nested = self.worktree / "nested"
+        nested.mkdir()
+        with self.assertRaises(Failure) as raised:
+            self.git.checkpoint(nested, self.base, "checkpoint")
+        self.assertEqual(raised.exception.kind, "workspace")
+
     def test_inherited_configuration_and_local_checkout_hook(self):
         (self.root / "config").write_text('[test]\n    value = fake-global\n')
         hooks = self.repo / "local-hooks"
