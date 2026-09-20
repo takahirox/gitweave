@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Normal workspace cleanup after storage failures
+
+On 2026-09-20, `python3 -m unittest discover -s tests -v` ran 141 deterministic tests in 23.613 seconds: 140 passed and the installed-entry-point test was skipped because the package was not installed. All 23 focused runtime tests passed. `python3 -m gitweave --help` and `git diff --check` passed.
+
+Focused regressions verify normal worktree removal after attempt-retention or failure-commit storage errors, including removal of the temporary parent directory and Git worktree registration. Cleanup failure now fails the Run and stops dependent execution without rewriting attempt notes. When execution or storage already failed, that failure remains primary and cleanup diagnostics are logged. Tests confirm that failed removal leaves ordinary remnants without fallback deletion and that provenance receives no `cleanup_warning`.
+
+The diff was reviewed against the supplied issue, accepted clarification, and development/review guidelines for completeness and minimal scope. No new recovery protocol or preservation policy was introduced. No live agents or external publication were invoked; final files remain in the assigned worktree for GitWeave checkpointing. This evidence does not constitute PR approval.
+
 ## Finalization-only Run records
 
 On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 141 deterministic tests in 24.508 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
