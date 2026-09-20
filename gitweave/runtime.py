@@ -40,14 +40,7 @@ class Runtime:
         self.actions = actions if actions is not None else GitHubActions(self.git, self.id)
         self.input_pr = self.actions.resolve_input(str(repo), pr) if pr is not None else None
         self.base = self.input_pr["head_sha"] if self.input_pr else self.git.resolve(commit)
-        for node in self.graph["nodes"].values():
-            if node.get("action") == "sync_pr" or (node.get("action") == "merge_pr" and "publish_node" not in node.get("config", {})):
-                if self.input_pr is None:
-                    raise Failure("pr_input", "Input PR actions require --pr")
         self.adapters = adapters if adapters is not None else {name: CLIAdapter(name) for name in ("codex", "claude")}
-        for node in self.graph["nodes"].values():
-            if node["kind"] == "agent" and node["provider"] not in self.adapters:
-                raise Failure("graph", f"Provider is not registered: {node['provider']}")
         self.record = {"version": 1, "run_id": self.id, "repository": str(self.git.repo),
                        "base_commit": self.base, "input_pr": self.input_pr,
                        "pr_remote_sha": self.input_pr["head_sha"] if self.input_pr else None,
@@ -174,6 +167,8 @@ class Runtime:
         suffix = f"attempts/{record['instance_id']}/{record['attempt']}"
         try:
             if node["kind"] == "agent":
+                if node["provider"] not in self.adapters:
+                    raise Failure("graph", f"Provider is not registered: {node['provider']}")
                 workspace = temp / "workspace"
                 self.git.add_worktree(workspace, context["workspace_base"])
                 result = self.adapters[node["provider"]].run(node, context, workspace, self.graph.get("timeout"))

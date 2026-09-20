@@ -1,6 +1,6 @@
 # GitWeave v0 runtime
 
-Supports Linux and macOS. Requires Python 3.11+, Git, and the `codex` and/or `claude` executables used by your graph. GitHub actions additionally require `gh` with native GitHub authentication. Install with `python -m pip install .`, or run directly with `python -m gitweave`.
+Supports Linux and macOS. Requires Python 3.11+, Git, and the `codex` and/or `claude` executables used by executed nodes. GitHub actions additionally require `gh` with native GitHub authentication. Install with `python -m pip install .`, or run directly with `python -m gitweave`.
 
 ```sh
 gitweave run --graph examples/single.json --repo /path/to/repository --commit HEAD "Implement the requested change"
@@ -11,6 +11,8 @@ The original checkout is not an output workspace. Each invocation receives an is
 ## Graph contract
 
 Version 1 uses JSON, with `version: 1`, a `nodes` object and a nonempty `flow` array. All node declarations have `kind` and explicit `workspace_base`: an upstream input index (starting at zero), or `"run"` for the Run's original commit. Input ordering follows graph branch/item order, never completion order. Graph files, instructions and target repositories are trusted operator inputs.
+
+Graph structure and node configuration are validated at Run initialization. Node-specific runtime requirements are checked only when the node executes: an unselected branch may contain an unregistered agent provider or an input-PR action without `--pr`. If selected, a missing adapter or missing existing-PR input fails that node attempt clearly and is retained in Run/attempt provenance. `sync_pr` and existing-PR `merge_pr` require `--pr` only when executed. Run inputs themselves (including an explicitly supplied PR) are still resolved at initialization.
 
 Agent nodes specify `provider`, `instruction`, optional `model` and `effort`, and optional `schema` for result data. Built-in providers are `codex` and `claude`; the Python runtime accepts additional adapters through dependency injection. Model and effort are passed to the chosen CLI; unsupported settings fail visibly rather than being silently substituted. Provider defaults apply if omitted.
 

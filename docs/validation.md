@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Node-specific validation at execution
+
+On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 136 deterministic tests in 25.998 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
+
+Focused branch tests cover an unregistered provider, `sync_pr`, and existing-PR `merge_pr` with both omitted and empty configuration. Unselected nodes do not prevent initialization or completion; selected nodes fail with explicit, nonretryable diagnostics retained in attempt notes and the Run record, and dependent nodes do not execute. No GitHub calls occur for missing PR input. Invalid static configuration in an unselected branch still fails initialization. Existing registered-provider, PR-input, and managed-publication workflows remain covered.
+
+The implementation removes the two whole-Graph runtime preflight scans, checks adapter registration within the agent attempt, and reuses the existing execution-time PR input check. Static validation and Run input resolution are unchanged. The diff was reviewed against the supplied issue and development/review guidelines for completeness and minimal scope. No live agents or external publication were invoked; tests use disposable local repositories and mocks. Final files remain in the assigned worktree for GitWeave checkpointing. This evidence does not constitute PR approval.
+
 ## Independent GitHub System Actions
 
 On 2026-09-20, `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m unittest discover -s tests -v` passed all 134 deterministic tests in 22.486 seconds, including the installed CLI entry point. Module and installed CLI `--help` checks and `git diff --check` passed.
