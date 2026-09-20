@@ -84,7 +84,7 @@ On an exhausted/nonretryable failure, scheduling stops. Already-running siblings
 
 Git operations inherit the parent process environment, including `GIT_*` variables, and use normal Git configuration and hooks. GitWeave does not force `core.hooksPath` or sandbox the Git environment. It sets author and committer name/email to `GitWeave <gitweave@localhost>` for its provenance commits. Checkpoint tree construction uses a private `GIT_INDEX_FILE` to capture final files without changing the worktree's index or an inherited index; these child-process overrides do not modify the parent environment. Checkpoints use `commit-tree`, which retains Git's normal plumbing behavior rather than running porcelain commit hooks.
 
-- `refs/gitweave/<run-id>/run` points to an independent record commit containing `run.json`, including the exact graph text, digest, request, base, timestamps, status, attempt index and terminal outputs.
+- `refs/gitweave/<run-id>/run` is written once at finalization for a completed or failed Run. It points to an independent record commit containing `run.json`, including the exact graph text, digest, request, base, timestamps, status, attempt index and terminal outputs. No aggregate Run record is written at startup or after individual attempts; attempt refs and notes retain provenance during execution.
 - `refs/gitweave/<run-id>/attempts/<instance-id>/<attempt>` retains every completed or failed attempt. The instance ID is distinct for each invocation, including loop iterations and fan-out items; the note retains declared node ID, item and nested fan-out origin.
 - `refs/notes/gitweave/<run-id>` stores execution records on attempt commits. Notes contain original inputs, workspace base, instruction/configuration, result, raw logs, timing, usage, sessions and failure diagnostics.
 - Success checkpoints the final assigned worktree, including an empty commit if unchanged. The checkpoint uses the Agent's final HEAD and any pending merge heads as parents; the original workspace base need not remain an ancestor. A private index captures final files even when the Agent's index has unresolved entries, without modifying that index. Conflict markers left in files are captured as file content. The original workspace base remains recorded in attempt provenance. A failure commit has the original workspace base as parent and the same tree as that base; a retry never uses the failure commit. Action attempts also get commits and notes.
@@ -95,7 +95,7 @@ git notes --ref=refs/notes/gitweave/RUN_ID show OUTPUT_COMMIT
 git diff BASE_COMMIT OUTPUT_COMMIT
 ```
 
-Raw logs can contain repository or prompt content; keep provenance under the same access controls as the repository. Runtime finalization publishes Run refs and notes when a provenance destination is resolved; see durable provenance below. There is no resume-after-process-crash command in v0; retained refs/notes support diagnosis. A hard process/host crash may leave the Run marked running and a worktree on disk. Git storage exhaustion can prevent record writes; those failures are surfaced rather than reported as completed execution.
+Raw logs can contain repository or prompt content; keep provenance under the same access controls as the repository. Runtime finalization publishes Run refs and notes when a provenance destination is resolved; see durable provenance below. There is no resume-after-process-crash command in v0; retained refs/notes support diagnosis. A hard process/host crash before finalization may leave retained attempt refs/notes and a worktree on disk, but no final Run record. Git storage exhaustion can prevent record writes; those failures are surfaced rather than reported as completed execution.
 
 ## Explicit GitHub actions
 
@@ -268,5 +268,5 @@ completed. The local final Run record, refs and notes remain available for
 inspection and retry. The record's `status` describes execution, not transfer
 success; it is saved before the push. Transfer errors preserve the underlying Git
 diagnostic alongside the persistence failure context. Final failed Runs are pushed
-too. A hard crash before finalization can leave a running Run locally. Successful
-persistence does not imply task approval.
+too. A hard crash before finalization can leave local attempt provenance without a
+final Run record. Successful persistence does not imply task approval.

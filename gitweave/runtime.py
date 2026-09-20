@@ -151,7 +151,6 @@ class Runtime:
                 self.record["attempts"].append({"instance_id": instance, "attempt": attempt,
                                                  "commit": commit, "status": record["status"]})
                 self.record["pr_remote_sha"] = getattr(self.actions, "remote_sha", None)
-                self.git.run_record(self.record)
                 if error is None:
                     return {"node_id": name, "instance_id": instance, "commit": commit,
                             "message": result.message, "data": result.data, "data_validated": "schema" in node}
@@ -211,7 +210,6 @@ class Runtime:
 
     async def execute(self):
         self.semaphore = asyncio.Semaphore(self.graph.get("concurrency", 4))
-        self.git.run_record(self.record)
         try:
             self.record["outputs"] = await self.flow(self.graph["flow"], [{"commit": self.base, "message": self.record["request"], "data": None}])
             self.record["status"] = "completed"
