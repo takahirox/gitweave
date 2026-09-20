@@ -248,12 +248,37 @@ class RuntimeTests(unittest.TestCase):
                         record = run.run()
                     self.assertEqual(record["status"], "completed" if recover else "failed")
                     self.assertEqual(invoke.call_count, retries + 1)
+                    if not recover:
+                        self.assertEqual(record["failure"]["message"], "insufficient credits")
                     for attempt in record["attempts"][:1 if recover else retries + 1]:
                         note = self.note(run, attempt["commit"])
+                        self.assertEqual(note["failure"]["message"], "insufficient credits")
                         self.assertEqual(note["failure"]["kind"], "provider")
                         self.assertTrue(note["failure"]["retryable"])
                         self.assertEqual(note["result"]["raw_stdout"], "usage limit reached")
                         self.assertEqual(note["result"]["raw_stderr"], "insufficient credits")
+
+    def test_native_provider_diagnostic_reaches_run_and_provenance(self):
+        message = "Authentication failed: please sign in again"
+        for provider, event in [
+            ("codex", {"type": "turn.failed", "error": {"message": message}}),
+            ("claude", {"type": "result", "subtype": "error_during_execution",
+                        "is_error": True, "errors": [message]}),
+        ]:
+            with self.subTest(provider=provider):
+                run = Runtime(graph({"a": dict(node(), provider=provider)}, ["a"]),
+                              self.repo, self.base, "request", adapters={provider: CLIAdapter(provider)})
+                raw = json.dumps(event)
+                with patch("gitweave.adapters.process", return_value=(1, raw, "stderr context")):
+                    record = run.run()
+                self.assertEqual(record["status"], "failed")
+                self.assertEqual(record["failure"]["message"], message)
+                for attempt in record["attempts"]:
+                    note = self.note(run, attempt["commit"])
+                    self.assertEqual(note["failure"]["message"], message)
+                    self.assertEqual(note["result"]["native"]["events"], [event])
+                    self.assertEqual(note["result"]["raw_stdout"], raw)
+                    self.assertEqual(note["result"]["raw_stderr"], "stderr context")
 
     def test_empty_map_preserves_upstream(self):
         def work(n, c, w):
