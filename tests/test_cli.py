@@ -23,8 +23,7 @@ class CLITests(unittest.TestCase):
         self.graph = {"version": 1, "nodes": {
             "work": {"kind": "agent", "provider": "uninstalled-provider",
                      "instruction": "work", "workspace_base": 42},
-            "publish": {"kind": "action", "action": "publish_pr", "workspace_base": "run",
-                        "config": {"repository": "owner/repo", "base": "main", "title": "Work"}},
+            "publish": {"kind": "command", "argv": ["./not-installed"], "workspace_base": "run"},
         }, "flow": ["work", "publish"]}
         self.path.write_text(json.dumps(self.graph))
 

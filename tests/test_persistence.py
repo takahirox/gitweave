@@ -52,21 +52,18 @@ class PersistenceTests(unittest.TestCase):
                 raise Failure("provider", "retry", retryable=True, result=Result(raw_stderr="failed log"))
             (w / "artifact").write_text("final artifact")
             return Result(message="success", raw_stdout="success log", usage={"tokens": 12})
-        remote = self.remote
-        class Actions:
-            def run(self, name, node, context):
-                artifact = context["inputs"][0]["commit"]
-                # Simulate artifact publication, merge and branch deletion locally.
-                git(remote, "fetch", "--no-tags", "-q", str(self_repo), artifact + ":refs/heads/topic")
-                git(remote, "update-ref", "refs/heads/main", artifact)
-                git(remote, "update-ref", "-d", "refs/heads/topic")
-                return Result(data={"merged": True, "merge_commit": artifact})
-        self_repo = self.repo
-        action = dict(kind="action", action="publish_pr", workspace_base=0,
-                      config={"repository": "owner/repo", "base": "main", "title": "PR"})
-        run = Runtime(graph({"work": node(), "final": action}, ["work", "final"], retries=1),
-                      self.repo, self.base, "request", adapters={"fake": Fake(work)},
-                      actions=Actions(), provenance_remote=str(self.remote))
+        remote, source = self.remote, self.repo
+        def final(n, c, w):
+            artifact = c["inputs"][0]["commit"]
+            # Simulate external publication, merge and branch deletion; no files change.
+            git(remote, "fetch", "--no-tags", "-q", str(source), artifact + ":refs/heads/topic")
+            git(remote, "update-ref", "refs/heads/main", artifact)
+            git(remote, "update-ref", "-d", "refs/heads/topic")
+            return Result(data={"merged": True, "merge_commit": artifact})
+        run = Runtime(graph({"work": node(), "final": node("final")}, ["work", "final"], retries=1),
+                      self.repo, self.base, "request",
+                      adapters={"fake": Fake(lambda n, c, w: final(n, c, w) if n["instruction"] == "final" else work(n, c, w))},
+                      provenance_remote=str(self.remote))
         git(self.repo, "update-ref", "refs/gitweave/other/run", self.base)
         git(self.repo, "update-ref", "refs/notes/gitweave/other", self.base)
         git(self.repo, "update-ref", run.git.notes + "-other", self.base)
@@ -191,91 +188,10 @@ class PersistenceTests(unittest.TestCase):
         self.assertIsNone(destination(storage, {}))
         git(self.repo, "remote", "add", "origin", str(self.remote))
         self.assertEqual(destination(storage, {}), "origin")
-        record = {"graph": graph({"p": {"action": "publish_pr", "config": {"repository": "owner/artifact"}}}, [])}
-        self.assertEqual(destination(storage, record), "origin")
-        record["publication_repositories"] = ["owner/artifact"]
-        self.assertEqual(destination(storage, record), "https://github.com/owner/artifact.git")
-        self.assertEqual(destination(storage, record, "origin"), "origin")
-        record["github_repository"] = "other/repo"
-        with self.assertRaisesRegex(Failure, "Multiple artifact"):
-            destination(storage, record)
-        self.assertEqual(destination(storage, record, "git@example.test:repo.git"), "git@example.test:repo.git")
-        self.assertEqual(destination(storage, {"github_repository": "other/repo"}), "https://github.com/other/repo.git")
-        self.assertEqual(destination(storage, {"github_repository": "Owner/Artifact",
-                                               "publication_repositories": ["owner/artifact"]}),
-                         "https://github.com/Owner/Artifact.git")
-
-    def test_actual_publication_destinations(self):
-        def publish(repository):
-            return dict(kind="action", action="publish_pr", workspace_base=0,
-                        config={"repository": repository, "base": "main", "title": "PR"})
-
-        nodes = {"route": node(schema={"type": "boolean"}),
-                 "a": publish("owner/a"), "b": publish("owner/b"),
-                 "same": publish("owner/a")}
-        conditional = ["route", {"if": {"condition": {"path": "/0/data", "equals": True},
-                                        "then": ["a"], "else": ["b"]}}]
-        cases = [
-            ("selected then", conditional, True, None, None, None, ["a"], "owner/a"),
-            ("selected else", conditional, False, None, None, None, ["b"], "owner/b"),
-            ("unreachable", ["route"], True, None, None, None, [], None),
-            ("failed invocation", ["a", "b"], True, "a", None, None, ["a"], "owner/a"),
-            ("failure before invocation", ["route", "a"], True, "route", None, None, [], None),
-            ("repeated target", ["a", "same"], True, None, None, None, ["a", "same"], "owner/a"),
-            ("parallel targets", [{"parallel": [["a"], ["b"]]}], True, None, None, None, ["a", "b"], "ambiguous"),
-            ("multiple actual", ["a", "b"], True, None, None, None, ["a", "b"], "ambiguous"),
-            ("failed second target", ["a", "b"], True, "b", None, None, ["a", "b"], "ambiguous"),
-            ("override", ["a", "b"], True, None, None, "chosen", ["a", "b"], "chosen"),
-            ("input only", ["route"], True, None, "owner/input", None, [], "owner/input"),
-            ("input matches", ["a"], True, None, "owner/a", None, ["a"], "owner/a"),
-            ("input differs", ["a"], True, None, "owner/input", None, ["a"], "ambiguous"),
-            ("input override", ["a"], True, None, "owner/input", "chosen", ["a"], "chosen"),
-        ]
-        for label, flow, selected, failed, input_repo, override, invoked, expected in cases:
-            with self.subTest(label=label):
-                def work(*args):
-                    if failed == "route":
-                        raise Failure("test", "route failed")
-                    return Result(data=selected)
-
-                def action(name, node, context):
-                    if name == failed:
-                        raise Failure("test", "publication failed", retryable=True)
-                    return Result()
-
-                actions = Mock()
-                actions.remote_sha = None
-                actions.run.side_effect = action
-                actions.resolve_input.return_value = {"repository": input_repo, "head_sha": self.base}
-                # Use local objects for the existing-PR input; no GitHub fetches.
-                with patch("gitweave.runtime.Git",
-                           side_effect=lambda repo, run_id, **kw: Git(self.repo, run_id)):
-                    run = Runtime(graph(nodes, flow, retries=1), input_repo or self.repo,
-                                  None if input_repo else self.base, "request",
-                                  pr=1 if input_repo else None, actions=actions,
-                                  adapters={"fake": Fake(work)}, provenance_remote=override)
-                storage = run.git
-                with patch("gitweave.runtime.persist") as push:
-                    if expected == "ambiguous":
-                        with self.assertRaisesRegex(Failure, "Multiple artifact"):
-                            run.run()
-                        push.assert_not_called()
-                    else:
-                        record = run.run()
-                        target = ("https://github.com/" + expected + ".git"
-                                  if expected and expected != "chosen" else expected)
-                        self.assertEqual(record["provenance_destination"], target)
-                        if target:
-                            push.assert_called_once_with(storage, target)
-                        else:
-                            push.assert_not_called()
-                expected_calls = [name for name in invoked for _ in range(2 if name == failed else 1)]
-                self.assertCountEqual([c.args[0] for c in actions.run.call_args_list], expected_calls)
-                self.assertEqual(run.record["status"], "failed" if failed else "completed")
-                self.assertEqual(run.record["publication_repositories"],
-                                 sorted({nodes[name]["config"]["repository"] for name in invoked}))
-                stored = json.loads(git(self.repo, "show", run.record["run_ref"] + ":run.json"))
-                self.assertEqual(stored, run.record)
+        self.assertEqual(destination(storage, {"github_repository": "owner/repo"}), "https://github.com/owner/repo.git")
+        self.assertEqual(destination(storage, {"github_repository": "owner/repo"}, "git@example.test:repo.git"),
+                         "git@example.test:repo.git")
+        self.assertEqual(destination(storage, {"github_repository": None}, "chosen"), "chosen")
 
     def test_transfer_error_preserves_git_diagnostic_and_local_refs(self):
         run = self.run_local()

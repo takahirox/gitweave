@@ -11,8 +11,8 @@ import tempfile
 import sys
 import time
 import uuid
-from .actions import GitHubActions
 from .adapters import CLIAdapter
+from .command import run_command
 from .git import Git
 from .persistence import destination, persist
 from .graph import validate_graph
@@ -24,7 +24,7 @@ def now():
 
 
 class Runtime:
-    def __init__(self, graph_text, repo, commit, request, *, adapters=None, actions=None, pr=None, issue=None, provenance_remote=None):
+    def __init__(self, graph_text, repo, commit, request, *, adapters=None, pr=None, issue=None, provenance_remote=None):
         self.graph = validate_graph(json.loads(graph_text))
         self.id = uuid.uuid4().hex
         self.github_repository = None
@@ -35,22 +35,20 @@ class Runtime:
             if not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", str(repo)) or str(repo).split("/")[1] in (".", ".."):
                 raise Failure(source, "--pr and --issue require a GitHub owner/repo identity, not a checkout path")
             self.github_repository = str(repo)
+            self.run_input = {"kind": "pull_request" if pr is not None else "issue", "number": number}
             storage = Path.cwd() / ".gitweave" / "runs" / self.id / "repository.git"
             self.git = Git(storage, self.id, initialize=True)
         else:
             if commit is None:
                 raise Failure("input", "A local repository requires --commit")
             self.git = Git(repo, self.id)
-        self.actions = actions if actions is not None else GitHubActions(self.git, self.id)
-        if pr is not None:
-            self.base = self.actions.resolve_input(self.github_repository, pr)["head_sha"]
-            self.run_input = {"kind": "pull_request", "number": pr}
-        elif issue is not None:
-            # The Issue is only identity; nodes read it. The base is the default branch HEAD.
-            self.git.command("fetch", "--no-tags", f"https://github.com/{self.github_repository}.git", "HEAD")
+        if self.github_repository:
+            # Run inputs are identities; nodes read Issue/PR content themselves.
+            # The base is the PR head or the default branch HEAD, frozen at Run start.
+            source = f"refs/pull/{pr}/head" if pr is not None else "HEAD"
+            self.git.command("fetch", "--no-tags", f"https://github.com/{self.github_repository}.git", source)
             self.base = self.git.resolve("FETCH_HEAD")
             self.git.command("update-ref", f"refs/gitweave/{self.id}/input/base", self.base)
-            self.run_input = {"kind": "issue", "number": issue}
         else:
             self.base = self.git.resolve(commit)
             self.run_input = {"kind": "commit", "commit": self.base}
@@ -58,12 +56,10 @@ class Runtime:
         self.record = {"version": 1, "run_id": self.id, "repository": str(self.git.repo),
                        "github_repository": self.github_repository,
                        "base_commit": self.base, "run_input": self.run_input,
-                       "pr_remote_sha": getattr(self.actions, "remote_sha", None),
                        "request": request, "graph": graph_text,
                        "graph_digest": hashlib.sha256(graph_text.encode()).hexdigest(),
                        "started_at": now(), "status": "running", "attempts": [], "outputs": []}
         self.provenance_remote = provenance_remote
-        self.publication_repositories = set()
         self.record["provenance_destination"] = None
         self.steps = 0
         self.instances = 0
@@ -152,23 +148,24 @@ class Runtime:
             base = self.base if choice == "run" else inputs[choice]["commit"]
             context = self.context(inputs, item, origin, base)
             context["instance_id"] = instance
-            for attempt in range(1, self.graph.get("retries", 0) + 2):
+            retries = node.get("retries", self.graph.get("retries", 0))
+            for attempt in range(1, retries + 2):
                 if self.stopped:
                     raise Failure("stopped", "Run stopped before retry")
                 record = {"run_id": self.id, "node_id": name, "instance_id": instance,
                           "attempt": attempt, "fan_out_origin": origin, "item": item,
                           "kind": node["kind"], "provider": node.get("provider"), "model": node.get("model"),
                           "effort": node.get("effort"), "instruction": node.get("instruction"),
+                          "argv": node.get("argv"), "config": node.get("config"),
                           "input_commits": [v["commit"] for v in inputs], "inputs": inputs,
                           "workspace_base": base, "started_at": now()}
                 result, commit, error = await asyncio.to_thread(self.attempt, name, node, context, record)
                 self.record["attempts"].append({"instance_id": instance, "attempt": attempt,
                                                  "commit": commit, "status": record["status"]})
-                self.record["pr_remote_sha"] = getattr(self.actions, "remote_sha", None)
                 if error is None:
                     return {"node_id": name, "instance_id": instance, "commit": commit,
                             "message": result.message, "data": result.data, "data_validated": "schema" in node}
-                if not error.retryable or attempt > self.graph.get("retries", 0):
+                if not error.retryable or attempt > retries:
                     self.errors.append({"kind": error.kind, "message": str(error), "instance_id": instance})
                     self.stopped = True
                     raise error
@@ -181,21 +178,24 @@ class Runtime:
         temp = Path(tempfile.mkdtemp(prefix=f"gitweave-{self.id[:8]}-"))
         suffix = f"attempts/{record['instance_id']}/{record['attempt']}"
         try:
+            if node["kind"] == "agent" and node["provider"] not in self.adapters:
+                raise Failure("graph", f"Provider is not registered: {node['provider']}")
+            workspace = temp / "workspace"
+            self.git.add_worktree(workspace, context["workspace_base"])
+            timeout = node.get("timeout", self.graph.get("timeout"))
             if node["kind"] == "agent":
-                if node["provider"] not in self.adapters:
-                    raise Failure("graph", f"Provider is not registered: {node['provider']}")
-                workspace = temp / "workspace"
-                self.git.add_worktree(workspace, context["workspace_base"])
-                result = self.adapters[node["provider"]].run(node, context, workspace, self.graph.get("timeout"))
+                result = self.adapters[node["provider"]].run(node, context, workspace, timeout)
             else:
-                if node["action"] == "publish_pr":
-                    self.publication_repositories.add(node["config"]["repository"])
-                result = self.actions.run(name, node, context)
+                result = run_command(node, context, workspace, timeout)
             if "schema" in node:
-                validate(result.data, node["schema"])
+                try:
+                    validate(result.data, node["schema"])
+                except Failure as exc:
+                    # Invalid Command output is a Runtime Failure governed by retries.
+                    exc.retryable = node["kind"] == "command"
+                    raise
             message = f"GitWeave {self.id} {record['instance_id']} attempt {record['attempt']}"
-            commit = (self.git.checkpoint(workspace, context["workspace_base"], message) if workspace is not None
-                      else self.git.empty(context["workspace_base"], message))
+            commit = self.git.checkpoint(workspace, context["workspace_base"], message)
             record.update(status="completed", output_commit=commit)
         except Exception as exc:
             error = exc if isinstance(exc, Failure) else Failure("internal", str(exc))
@@ -231,7 +231,6 @@ class Runtime:
         finally:
             self.record.update(ended_at=now(), steps=self.steps, errors=self.errors,
                                notes_ref=self.git.notes, run_ref=f"refs/gitweave/{self.id}/run")
-            self.record["publication_repositories"] = sorted(self.publication_repositories)
             try:
                 self.record["provenance_destination"] = destination(self.git, self.record, self.provenance_remote)
             finally:

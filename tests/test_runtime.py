@@ -51,10 +51,6 @@ class RuntimeTests(unittest.TestCase):
         cases = [
             (dict(node(), provider="missing"), "graph", "Provider is not registered: missing"),
         ]
-        for action in ("sync_pr", "merge_pr"):
-            for config in ({}, {"config": {}}):
-                cases.append((dict(kind="action", action=action, workspace_base=0, **config),
-                              "pr_input", "This action requires an existing-PR Run input"))
         for optional, kind, message in cases:
             for selected in (False, True):
                 with self.subTest(optional=optional, selected=selected):
@@ -64,9 +60,7 @@ class RuntimeTests(unittest.TestCase):
                                              "then": ["optional"], "else": []}}, "after"]
                     work = Mock(return_value=Result(data=selected))
                     run = self.runtime(nodes, flow, work, retries=2)
-                    with patch.object(run.actions, "gh") as gh:
-                        record = run.run()
-                    gh.assert_not_called()
+                    record = run.run()
                     self.assertEqual(record["status"], "failed" if selected else "completed")
                     self.assertEqual(work.call_count, 1 if selected else 2)
                     notes = [self.note(run, attempt["commit"]) for attempt in record["attempts"]]
@@ -82,12 +76,11 @@ class RuntimeTests(unittest.TestCase):
 
     def test_static_errors_in_unselected_branch_still_fail_initialization(self):
         nodes = {"route": node(schema={"type": "boolean"}),
-                 "invalid": dict(kind="action", action="sync_pr", workspace_base=0,
-                                 config={"repository": "owner/repo"})}
+                 "invalid": dict(kind="command", workspace_base=0, argv=[])}
         flow = ["route", {"if": {"condition": {"path": "/0/data", "equals": True},
                                  "then": ["invalid"], "else": []}}]
         work = Mock(return_value=Result(data=False))
-        with self.assertRaisesRegex(Failure, "input PR actions require empty config"):
+        with self.assertRaisesRegex(Failure, "argv must be a nonempty list"):
             self.runtime(nodes, flow, work)
         work.assert_not_called()
 
@@ -366,50 +359,6 @@ class RuntimeTests(unittest.TestCase):
                            ["plan", {"map": {"path": "/0/data", "flow": ["worker"]}}, "join"], work)
         self.assertEqual(len(run.run()["attempts"]), 2)
 
-    def test_parallel_github_comments_overlap(self):
-        barrier = threading.Barrier(2)
-        nodes = {action: dict(kind="action", action=action, workspace_base=0,
-                             config={"repository": "owner/repo", "number": number, "body": "Findings"})
-                 for number, action in enumerate(("comment_issue", "comment_pr"), 1)}
-        run = self.runtime(nodes, [{"parallel": [[name] for name in nodes]}], None, concurrency=2)
-
-        def gh(*args):
-            if "POST" in args:
-                # Both actions must reach the POST before either can complete.
-                barrier.wait(timeout=5)
-                number = int(args[3].split("/")[-2])
-                return json.dumps({"id": number, "html_url": f"comment/{number}"})
-            number = int(args[1].rsplit("/", 1)[1])
-            return json.dumps({"number": number, **({"pull_request": {}} if number == 2 else {})})
-
-        run.actions.gh = Mock(side_effect=gh)
-        with patch("gitweave.runtime.persist"):
-            record = run.run()
-        self.assertEqual(record["status"], "completed", record.get("failure"))
-        self.assertEqual(sorted(output["data"]["id"] for output in record["outputs"]), [1, 2])
-        self.assertEqual(run.actions.gh.call_count, 4)
-
-    def test_system_action_retry_and_result_handoff(self):
-        class Actions:
-            count = 0
-            def run(self, name, node, context):
-                self.count += 1
-                if self.count == 1:
-                    raise Failure("github", "transient", retryable=True)
-                return Result(data={"url": "https://example.test/pr"})
-        publish = dict(kind="action", action="publish_pr", workspace_base=0,
-                       config={"repository": "owner/repo", "base": "main", "title": "PR"})
-        def work(n, c, w):
-            self.assertEqual(c["inputs"][0]["data"]["url"], "https://example.test/pr")
-            return Result(message="done")
-        run = self.runtime({"pub": publish, "a": node()}, ["pub", "a"], work, retries=1)
-        run.actions = Actions()
-        with patch("gitweave.runtime.persist") as push:
-            record = run.run()
-            push.assert_called_once_with(run.git, "https://github.com/owner/repo.git")
-        self.assertEqual(record["status"], "completed")
-        self.assertEqual(len(record["attempts"]), 3)
-
     def test_running_sibling_is_retained_before_failure_finishes(self):
         barrier = threading.Barrier(2)
         def work(n, c, w):
@@ -427,47 +376,6 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(stored, record)
         for attempt in stored["attempts"]:
             self.assertEqual(self.note(run, attempt["commit"])["status"], attempt["status"])
-
-    def test_comment_loop_retry_posts_and_retains_diagnostics(self):
-        from unittest.mock import Mock
-        comment = dict(kind="action", action="comment_pr", workspace_base=0,
-                       config={"repository": "owner/repo", "number": 9, "body_path": "/0/message"})
-        reviews = []
-        def review(n, c, w):
-            reviews.append(c)
-            return Result(message=f"Review {len(reviews)}")
-        def decide(n, c, w):
-            self.assertEqual(c["inputs"][0]["data"]["id"], len(reviews) * 2)
-            return Result(data=len(reviews) < 2)
-        run = self.runtime({"review": node("review"), "comment": comment,
-                            "decide": node("decide", schema={"type": "boolean"})},
-                           [{"loop": {"flow": ["review", "comment", "decide"],
-                                      "while": {"path": "/0/data", "equals": True}}}],
-                           lambda n, c, w: review(n, c, w) if n["instruction"] == "review" else decide(n, c, w),
-                           retries=1)
-        comments = []
-        def github(*args):
-            if "POST" in args:
-                comments.append({"id": len(comments) + 1, "html_url": "https://example.test/comment",
-                                 "body": args[-1].removeprefix("body=")})
-                if len(comments) % 2:
-                    raise Failure("github", "Response lost", retryable=True)
-                return json.dumps(comments[-1])
-            return json.dumps({"number": 9, "pull_request": {}})
-        run.actions.gh = Mock(side_effect=github)
-        record = run.run()
-        self.assertEqual(record["status"], "completed", record.get("failure"))
-        attempts = [self.note(run, a["commit"]) for a in record["attempts"]]
-        comments_attempts = [a for a in attempts if a["node_id"] == "comment"]
-        self.assertEqual(len(comments_attempts), 4)
-        self.assertEqual([a["status"] for a in comments_attempts], ["failed", "completed"] * 2)
-        self.assertEqual(len({a["instance_id"] for a in comments_attempts}), 2)
-        self.assertEqual(comments_attempts[0]["instance_id"], comments_attempts[1]["instance_id"])
-        self.assertEqual(comments_attempts[0]["failure"]["message"], "Response lost")
-        self.assertEqual(comments_attempts[1]["result"]["data"]["id"], 2)
-        self.assertEqual(comments_attempts[3]["result"]["data"]["id"], 4)
-        self.assertEqual([c["body"] for c in comments], ["Review 1", "Review 1", "Review 2", "Review 2"])
-        self.assertEqual(reviews[0]["instance_id"], attempts[0]["instance_id"])
 
     def test_storage_failure_still_cleans_workspace(self):
         for operation in ("retain", "empty"):

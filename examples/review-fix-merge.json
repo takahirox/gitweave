@@ -7,14 +7,26 @@
       "kind": "agent",
       "provider": "codex",
       "workspace_base": 0,
-      "instruction": "Review the selected artifact against the request and the base branch of the pull request identified by run_input. Inspect the full diff and run relevant deterministic tests. Leave files unchanged. Set approved=true only when no concrete findings remain; otherwise return actionable findings. Runtime completion is not approval. Do not publish, push, merge, or post comments.",
+      "instruction": "Review the selected artifact against the request and the base branch of the pull request identified by run_input in github_repository. Inspect the full diff and run relevant deterministic tests. Leave files unchanged. Set approved=true only when no concrete findings remain; otherwise return actionable findings. Do not push, merge, or post comments.",
       "schema": {
         "type": "object",
         "properties": {
-          "approved": {"type": "boolean"},
-          "findings": {"type": "array", "items": {"type": "string"}}
+          "approved": {
+            "type": "boolean",
+            "description": "True only when no blocking review findings remain."
+          },
+          "findings": {
+            "type": "array",
+            "description": "Blocking problems that must be fixed before approval.",
+            "items": {
+              "type": "string"
+            }
+          }
         },
-        "required": ["approved", "findings"],
+        "required": [
+          "approved",
+          "findings"
+        ],
         "additionalProperties": false
       }
     },
@@ -22,21 +34,65 @@
       "kind": "agent",
       "provider": "codex",
       "workspace_base": 0,
-      "instruction": "Fix the concrete findings in inputs[0].data.findings in the assigned worktree. Run relevant deterministic tests and summarize fixes. Leave final files for the runtime checkpoint. Do not publish, push, merge, or post comments."
+      "instruction": "Fix the concrete findings in inputs[0].data.findings in the assigned worktree. Run relevant deterministic tests and summarize fixes. Leave final files for the runtime checkpoint. Do not push, merge, or post comments."
     },
-    "sync": {"kind": "action", "action": "sync_pr", "workspace_base": 0, "config": {}},
-    "merge": {"kind": "action", "action": "merge_pr", "workspace_base": 0, "config": {}}
+    "push": {
+      "kind": "agent",
+      "provider": "codex",
+      "workspace_base": 0,
+      "retries": 0,
+      "instruction": "Commit any uncommitted changes in the worktree, then update the head branch of the pull request identified by run_input in github_repository with this worktree's HEAD, following repository conventions. Do not force-overwrite changes made by others. Do not merge or post comments. Report the resulting PR head SHA."
+    },
+    "merge": {
+      "kind": "agent",
+      "provider": "codex",
+      "workspace_base": 0,
+      "retries": 0,
+      "instruction": "Merge the pull request identified by run_input in github_repository, following repository conventions and GitHub policy. Do not bypass required checks or reviews. Report whether it merged and the merge commit.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "merged": {
+            "type": "boolean"
+          },
+          "merge_commit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "merged",
+          "merge_commit"
+        ],
+        "additionalProperties": false
+      }
+    }
   },
   "flow": [
     "review",
-    {"loop": {
-      "flow": [{"if": {
-        "condition": {"path": "/0/data/approved", "equals": true},
-        "then": [],
-        "else": ["fix", "sync", "review"]
-      }}],
-      "while": {"path": "/0/data/approved", "equals": false}
-    }},
+    {
+      "loop": {
+        "flow": [
+          {
+            "if": {
+              "condition": {
+                "path": "/0/data/approved",
+                "equals": true
+              },
+              "then": [],
+              "else": [
+                "fix",
+                "push",
+                "review"
+              ]
+            }
+          }
+        ],
+        "while": {
+          "path": "/0/data/approved",
+          "equals": false
+        }
+      }
+    },
     "merge"
   ]
 }

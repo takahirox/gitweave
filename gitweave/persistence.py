@@ -5,16 +5,8 @@ from .model import Failure
 def destination(git, record, remote=None):
     if remote is not None:
         return remote
-    # GitHub repository names are case-insensitive; the Run repository's spelling wins.
-    repositories = {}
-    for repository in [record.get("github_repository"), *sorted(record.get("publication_repositories", []))]:
-        if repository:
-            repositories.setdefault(repository.lower(), repository)
-    repositories = set(repositories.values())
-    if len(repositories) > 1:
-        raise Failure("persistence", "Multiple artifact repositories require --provenance-remote selection")
-    if repositories:
-        return f"https://github.com/{repositories.pop()}.git"
+    if record.get("github_repository"):
+        return f"https://github.com/{record['github_repository']}.git"
     return "origin" if "origin" in git.command("remote").splitlines() else None
 
 

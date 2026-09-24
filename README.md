@@ -1,6 +1,6 @@
 # GitWeave
 
-GitWeave is a Git-native graph runtime for composing AI agents into end-to-end workflows.
+GitWeave is a Git-native graph runtime for composing AI agents and deterministic commands into end-to-end workflows.
 
 It is designed around a simple idea: **use a graph to control how AI agents collaborate, and use Git to carry artifact state and execution provenance between them.**
 
@@ -30,8 +30,10 @@ A workflow is a graph of explicit steps connected by edges.
 
 Graph steps may include:
 
-- **Agent Nodes** — one AI-agent execution
-- **System Actions** — operations performed directly by GitWeave, such as creating or merging a Pull Request
+- **Agent Nodes** — one AI-agent execution, whose responsibility may be as narrow or as broad as the graph author chooses
+- **Command Nodes** — one deterministic process, for repeated work where AI is unnecessary
+
+Both kinds share one contract: they receive the Run input, upstream checkpoint commits and Results, and a selected workspace base; they produce one checkpoint commit plus a Result (`message` and optionally schema-validated `data`).
 
 Edges define sequencing, conditions, loops, fan-out, joins, and parallel execution.
 
@@ -39,7 +41,7 @@ Roles such as planner, worker, reviewer, or integrator are not special runtime c
 
 ### Git as the state and provenance layer
 
-Agent Nodes work in dedicated Git worktrees.
+Agent and Command Nodes work in dedicated Git worktrees.
 
 A node receives one or more input commits, performs its work, and GitWeave checkpoints the resulting worktree state into an output commit.
 
@@ -131,7 +133,7 @@ Review / Fix
 Merge
 ```
 
-Internal node-to-node handoff uses commits and results. Repository-wide actions such as Pull Request creation and merge remain explicit system actions rather than ordinary agent behavior.
+Internal node-to-node handoff uses commits and results. GitWeave has no built-in GitHub workflow policy: creating, reviewing, merging, commenting on Pull Requests and closing Issues are ordinary Agent or Command Nodes. One strong Agent may own the whole flow, or the graph may split it into several nodes; state such as PR identity is passed explicitly through Results. See [issue-to-merge.json](examples/issue-to-merge.json).
 
 ## Goal
 
@@ -151,10 +153,10 @@ gitweave run --graph examples/single.json --repo /path/to/repo --commit HEAD "Im
 gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10 "Review, fix, and merge this PR"
 
 # Start from a GitHub Issue; nodes receive run_input {"kind": "issue", "number": 123}
-gitweave run --graph graph.json --repo owner/repo --issue 123 "Implement this Issue"
+gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123 "Implement this Issue"
 ```
 
-See the [runtime guide](docs/runtime.md) for graph syntax, parallel execution, fan-out, review/fix loops, Git records, explicit PR actions, and validation. [The parallel example](examples/parallel.json) combines both providers in one graph.
+See the [runtime guide](docs/runtime.md) for graph syntax, Command Nodes, parallel execution, fan-out, review/fix loops, Issue-driven development, Git records, and validation. [The parallel example](examples/parallel.json) combines both providers in one graph.
 
 Final Runs automatically push their GitWeave refs and notes to the artifact
 repository or configured origin. Offline Runs can be pushed later with Git;
@@ -173,6 +175,6 @@ python -m gitweave validate --graph examples/single.json
 
 The command checks JSON syntax, graph structure, node references, and supported result schemas. It prints success to stdout and exits with status 0, or prints an input-error diagnostic to stderr and exits with status 2.
 
-Validation needs no target repository, base commit, user request, installed agent CLIs, or agent/GitHub credentials. It creates no Run, invokes no agents or System Actions, accesses no network, and does not modify repository state.
+Validation needs no target repository, base commit, user request, installed agent CLIs, or agent/GitHub credentials. It creates no Run, invokes no agents or commands, accesses no network, and does not modify repository state.
 
 Success means the graph passes static validation. It does not check provider availability, authentication, runtime-dependent input values, or semantic task correctness, and does not guarantee that agent execution or the task outcome will succeed.
