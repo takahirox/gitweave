@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "max_steps": 10,
+  "max_steps": 1,
   "nodes": {
     "work": {
       "kind": "agent",

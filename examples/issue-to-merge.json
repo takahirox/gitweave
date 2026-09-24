@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "max_steps": 40,
+  "max_steps": 30,
   "retries": 1,
   "nodes": {
     "implement": {

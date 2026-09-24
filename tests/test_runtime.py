@@ -314,6 +314,64 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(record["failure"]["kind"], "step_limit")
         self.assertLessEqual(record["steps"], 5)
 
+    def test_max_steps_counts_node_invocations_only(self):
+        # Five invocations fit exactly although many control blocks are evaluated.
+        loop = ["a", {"loop": {"flow": [{"if": {"condition": {"path": "/0/data", "equals": 99}, "then": [], "else": ["a"]}}],
+                               "while": {"path": "/0/data", "equals": True}}}]
+        calls = []
+        def five(n, c, w):
+            calls.append(1)
+            return Result(data=len(calls) < 5)
+        record = self.runtime({"a": node(schema={"type": "boolean"})}, loop, five, max_steps=5).run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual((len(calls), record["steps"]), (5, 5))
+        calls.clear()
+        record = self.runtime({"a": node(schema={"type": "boolean"})}, loop, lambda *a: (calls.append(1), Result(data=True))[1], max_steps=5).run()
+        self.assertEqual(record["failure"]["kind"], "step_limit")
+        self.assertEqual(len(calls), 5)
+        # Retry attempts do not consume additional steps.
+        attempts = []
+        def flaky(n, c, w):
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise Failure("provider", "flaky", retryable=True)
+            return Result()
+        record = self.runtime({"a": node()}, ["a"], flaky, max_steps=1, retries=2).run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual((len(attempts), record["steps"]), (3, 1))
+        # Map pre-check uses the remaining node-invocation budget.
+        plan = node("plan", schema={"type": "array"})
+        flow = ["plan", {"map": {"path": "/0/data", "flow": ["a"]}}]
+        record = self.runtime({"plan": plan, "a": node()}, flow, lambda n, c, w: Result(data=[1, 2, 3]), max_steps=4).run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        record = self.runtime({"plan": plan, "a": node()}, flow, lambda n, c, w: Result(data=[1, 2, 3]), max_steps=3).run()
+        self.assertEqual(record["failure"], {"kind": "step_limit", "message": "fan-out exceeds remaining step budget"})
+
+    def test_loop_iteration_without_a_node_fails_immediately(self):
+        empty_if = {"if": {"condition": {"path": "/0/data", "equals": True}, "then": [], "else": []}}
+        for label, body in (("empty if", [empty_if]),
+                            ("empty map", [{"map": {"path": "/0/data/items", "flow": ["a"]}}]),
+                            ("parallel of empty ifs", [{"parallel": [[empty_if], [empty_if]]}])):
+            with self.subTest(label=label):
+                data = {"items": []} if label == "empty map" else True
+                condition = {"path": "/0/data/items" if label == "empty map" else "/0/data",
+                             "equals": [] if label == "empty map" else True}
+                run = self.runtime({"start": node(schema={"type": "object"} if label == "empty map" else {"type": "boolean"}),
+                                    "a": node()},
+                                   ["start", {"loop": {"flow": body, "while": condition}}],
+                                   lambda *a: Result(data=data))
+                record = run.run()
+                self.assertEqual(record["failure"]["kind"], "loop")
+                self.assertEqual(record["steps"], 1)
+        # A sibling's invocations share the counter; the Run still terminates.
+        spin = {"loop": {"flow": [empty_if], "while": {"path": "/0/data", "equals": True}}}
+        for max_steps in (3, 100):
+            with self.subTest(sibling_budget=max_steps):
+                record = self.runtime({"start": node(schema={"type": "boolean"}), "a": node()},
+                                      ["start", {"parallel": [[spin], ["a", "a"]]}],
+                                      lambda *a: Result(data=True), max_steps=max_steps, concurrency=2).run()
+                self.assertIn(record["failure"]["kind"], ("loop", "step_limit"))
+
     def test_retryability_flag_controls_retries_regardless_of_kind(self):
         for retryable in (False, True):
             with self.subTest(retryable=retryable):

@@ -109,7 +109,8 @@ class Runtime:
                 if isinstance(step, str):
                     inputs = [await self.node(step, inputs, item, origin)]
                     continue
-                self.tick()
+                if self.stopped:
+                    raise Failure("stopped", "Run has stopped scheduling work")
                 op, spec = next(iter(step.items()))
                 if op == "parallel":
                     inputs = await self.branches([(branch, item, origin) for branch in spec], inputs, item, origin)
@@ -127,10 +128,14 @@ class Runtime:
                     inputs = await self.flow(spec["then"] if self.matches(inputs, spec["condition"]) else spec["else"], inputs, item, origin)
                 elif op == "loop":
                     while True:
+                        invoked = self.steps
                         inputs = await self.flow(spec["flow"], inputs, item, origin)
                         if not self.matches(inputs, spec["while"]):
                             break
-                        self.tick()
+                        # Without a node invocation the condition's result cannot change.
+                        # (Invocations elsewhere still consume max_steps, so this terminates.)
+                        if self.steps == invoked:
+                            raise Failure("loop", "Loop iteration invoked no node while its condition still matches")
             return inputs
         except BaseException:
             self.stopped = True
