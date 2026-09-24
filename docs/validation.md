@@ -4,7 +4,7 @@
 
 On 2026-09-25, `python3 -m unittest discover -s tests -v`: all 143 deterministic tests passed. `git diff --check` passed.
 
-Real local Git tests verify that `--issue` starts from the remote default branch HEAD fetched once at initialization, retains it as the input base ref, exposes only `run_input: {"kind": "issue", "number": 123}` to nodes, makes no GitHub API call, and persists provenance to the Run repository. Contract tests reject nonpositive/non-integer numbers, checkout paths, and combination with `--commit` or `--pr`; CLI tests cover the three mutually exclusive modes. PR and commit Runs expose the same `run_input` shape instead of `input_pr`/`pr_remote_sha` node-context fields. No live agents or external publication were invoked.
+Real local Git tests verify that `--issue` starts from the remote default branch HEAD fetched once at initialization, retains it as the input base ref, exposes only `run_input: {"kind": "issue", "number": 123}` to nodes, makes no GitHub API call, and persists provenance to the Run repository, comparing repository names case-insensitively. Commit-mode tests verify `run_input` of kind `commit` and a null `github_repository` in node context. Contract tests reject nonpositive/non-integer numbers, checkout paths, and combination with `--commit` or `--pr`; CLI tests cover the three mutually exclusive modes. PR and commit Runs expose the same `run_input` shape instead of `input_pr`/`pr_remote_sha` node-context fields. No live agents or external publication were invoked.
 
 ## Normal workspace cleanup after storage failures
 

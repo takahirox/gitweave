@@ -230,7 +230,8 @@ does not delete these refs.
 Destination selection uses `run --provenance-remote REMOTE_OR_URL` when supplied.
 Otherwise, selection happens at finalization using the Run's GitHub repository (`--pr` or `--issue`) and
 the repositories of `publish_pr` invocations that actually started, whether they
-succeeded or failed. Unexecuted nodes do not contribute. One distinct repository
+succeeded or failed. Unexecuted nodes do not contribute. Repository names are compared case-insensitively, keeping the Run repository's
+spelling. One distinct repository
 is used (`https://github.com/OWNER/REPO.git`), falling back to local `origin` when
 there is no such repository. Multiple distinct actual repositories require the
 explicit override at finalization; the Run records and refs remain local if this
