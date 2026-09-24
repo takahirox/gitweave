@@ -81,7 +81,7 @@ class Runtime:
     def context(self, inputs, item, origin, base):
         return {"run_id": self.id, "request": self.record["request"], "inputs": inputs,
                 "item": item, "fan_out_origin": origin, "workspace_base": base,
-                "run_input": copy.deepcopy(self.run_input)}
+                "github_repository": self.github_repository, "run_input": copy.deepcopy(self.run_input)}
 
     @staticmethod
     def control_value(inputs, path):

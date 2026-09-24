@@ -358,6 +358,7 @@ class RepositoryWorkflowTests(unittest.TestCase):
             self.assertEqual(git(w, "rev-parse", "HEAD"), self.head)
             self.assertEqual((w / "artifact").read_text(), "needs fix")
             self.assertEqual(c["run_input"], {"kind": "pull_request", "number": 10})
+            self.assertEqual(c["github_repository"], "owner/repo")
             self.assertNotIn("input_pr", c)
             self.assertNotIn("pr_remote_sha", c)
             c["run_input"]["number"] = 11
@@ -472,6 +473,7 @@ class RepositoryWorkflowTests(unittest.TestCase):
         seen = []
         def work(n, c, w):
             seen.append(c["run_input"])
+            self.assertEqual(c["github_repository"], "owner/repo")
             self.assertEqual(git(w, "rev-parse", "HEAD"), self.head)
             self.assertNotIn("input_pr", c)
             return Result()
