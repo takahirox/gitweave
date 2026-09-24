@@ -5,7 +5,7 @@
     "review": {
       "kind": "agent",
       "provider": "codex",
-      "instruction": "Review the pull request identified by run_input in github_repository against the request. Leave files unchanged. Return concrete findings in your human-readable message. Do not post to GitHub."
+      "instruction": "Review the pull request identified by run_input in github_repository against its description, plus the operator request if one is given. Leave files unchanged. Return concrete findings in your human-readable message. Do not post to GitHub."
     },
     "comment": {
       "kind": "command",

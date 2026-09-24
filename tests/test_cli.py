@@ -145,7 +145,8 @@ class CLITests(unittest.TestCase):
             self.assertEqual(stderr, "")
 
     def test_run_request_is_optional(self):
-        for source, expected in ((["--issue", "7"], {"pr": None, "issue": 7}), (["--commit", "HEAD"], {"pr": None, "issue": None})):
+        for source, expected in ((["--issue", "7"], {"pr": None, "issue": 7}), (["--pr", "8"], {"pr": 8, "issue": None}),
+                                 (["--commit", "HEAD"], {"pr": None, "issue": None})):
             with self.subTest(source=source), patch.object(cli, "Runtime") as runtime:
                 runtime.return_value.run.return_value = dict(run_id="id", status="completed", repository="r",
                                                              run_ref="run", notes_ref="notes", outputs=[])

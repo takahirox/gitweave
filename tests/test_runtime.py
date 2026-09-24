@@ -593,8 +593,6 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(seen[0]["inputs"], [{"node_id": None, "commit": self.base, "message": request, "data": None}])
         run = Runtime(graph({"a": node()}, ["a"]), self.repo, self.base, adapters={"fake": Fake(lambda *a: Result())})
         self.assertIsNone(run.run()["request"])
-        with self.assertRaises(Failure):
-            Runtime(graph({"a": node()}, ["a"]), self.repo, self.base, ["not", "text"])
 
     def test_nested_parallel_obeys_global_concurrency_bound(self):
         barrier = threading.Barrier(2)

@@ -6,7 +6,7 @@ Supports Linux and macOS. Requires Python 3.11+, Git, and the `codex` and/or `cl
 gitweave run --graph examples/single.json --repo /path/to/repository --commit HEAD "Implement the requested change"
 ```
 
-The trailing free-form request is optional. When supplied, nodes receive it as additional operator guidance (`request`, and as the `message` of the Run-base input). When omitted, it is `null` in node context and `run.json`, and nodes rely on their Graph instructions and `run_input`; this works for `--commit`, `--pr` and `--issue` Runs alike.
+The trailing free-form request is optional. When supplied, nodes receive it as additional operator guidance (`request`, and as the `message` of the Run-base input). When omitted, it is `null` in node context and `run.json`, and nodes rely on their Graph instructions and `run_input`; this works for `--commit`, `--pr` and `--issue` Runs alike. The `single` and `parallel` examples are request-driven (their instructions implement or plan the supplied request), so pass one with them; the PR and Issue examples work without one.
 
 The original checkout is not an output workspace. Each invocation receives an isolated detached worktree; inspect the returned terminal commit(s) to use its artifacts. Existing uncommitted files in the original checkout are not inputs. Local refs and notes retain Run and attempt history without a database. A successful Run means the graph executed normally, not that the task was approved.
 
