@@ -5,12 +5,10 @@
     "review": {
       "kind": "agent",
       "provider": "codex",
-      "workspace_base": 0,
       "instruction": "Review the pull request identified by run_input in github_repository against the request. Leave files unchanged. Return concrete findings in your human-readable message. Do not post to GitHub."
     },
     "comment": {
       "kind": "command",
-      "workspace_base": 0,
       "retries": 0,
       "argv": [
         "python3",

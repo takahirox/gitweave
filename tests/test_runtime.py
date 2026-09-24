@@ -240,6 +240,28 @@ class RuntimeTests(unittest.TestCase):
                            [{"parallel": [["a"], ["b"]]}, "j"], work, concurrency=2)
         self.assertEqual(run.run()["status"], "completed")
 
+    def test_omitted_workspace_base_defaults_to_first_input(self):
+        def work(n, c, w):
+            name = n["instruction"]
+            if name in ("left", "right"):
+                (w / "file").write_text(name)
+            elif name == "join":
+                self.assertEqual((w / "file").read_text(), "left")
+                self.assertEqual(git(w, "rev-parse", "HEAD"), c["inputs"][0]["commit"])
+            else:
+                self.assertEqual(name, "from-run")
+                self.assertFalse((w / "file").exists())
+            return Result(message=name)
+        nodes = {"a": node("left"), "b": node("right"), "j": node("join"), "r": dict(node("from-run"), workspace_base="run")}
+        for n in ("a", "b", "j"):
+            del nodes[n]["workspace_base"]
+        run = self.runtime(nodes, [{"parallel": [["a"], ["b"]]}, "j", "r"], work)
+        record = run.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        notes = [self.note(run, a["commit"]) for a in record["attempts"]]
+        join = next(n for n in notes if n["node_id"] == "j")
+        self.assertEqual(join["workspace_base"], join["input_commits"][0])
+
     def test_map_loop_and_conditional(self):
         def work(n, c, w):
             if n["instruction"] == "plan":

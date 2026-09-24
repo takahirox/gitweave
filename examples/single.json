@@ -5,7 +5,6 @@
     "work": {
       "kind": "agent",
       "provider": "codex",
-      "workspace_base": 0,
       "instruction": "Implement the user's request in the assigned worktree. Run relevant checks and summarize the result."
     }
   },
