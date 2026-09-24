@@ -154,7 +154,6 @@ class Runtime:
             if choice != "run" and choice >= len(inputs):
                 raise Failure("graph", f"{name}: workspace_base index outside inputs")
             base = self.base if choice == "run" else inputs[choice]["commit"]
-            context = self.context(inputs, item)
             retries = node.get("retries", self.graph.get("retries", 0))
             for attempt in range(1, retries + 2):
                 if self.stopped:
@@ -166,6 +165,8 @@ class Runtime:
                           "argv": node.get("argv"), "config": node.get("config"),
                           "input_commits": [v["commit"] for v in inputs], "inputs": inputs,
                           "workspace_base": base, "started_at": now()}
+                # A fresh copy per attempt: retries start from the original context.
+                context = self.context(inputs, item)
                 result, commit, error = await asyncio.to_thread(self.attempt, name, node, context, record)
                 self.record["attempts"].append({"instance_id": instance, "attempt": attempt,
                                                  "commit": commit, "status": record["status"]})

@@ -216,7 +216,7 @@ class AdapterTests(unittest.TestCase):
                                      + json.dumps(context, ensure_ascii=False))
 
     def test_preamble_explains_the_common_node_contract(self):
-        for term in ("official artifact boundary", "checkpoint commit", "github_repository",
+        for term in ("official artifact boundary", "node_id", "checkpoint commit", "github_repository",
                      "run_input", "inputs[]", "message", "data", "Result", "downstream", "later nodes"):
             with self.subTest(term=term):
                 self.assertIn(term, PREAMBLE)

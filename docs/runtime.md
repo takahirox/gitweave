@@ -118,7 +118,7 @@ A Command Node runs a deterministic process instead of an AI agent, for repeated
 
 | Channel | Contract |
 | --- | --- |
-| cwd | The node's dedicated worktree at `workspace_base`. A relative `argv[0]` such as `./scripts/op` resolves there. |
+| cwd | The node's dedicated worktree at `workspace_base` (its `HEAD`). A relative `argv[0]` such as `./scripts/op` resolves there. |
 | stdin | The node context as one JSON object (the same context an Agent sees: `request`, `github_repository`, `run_input`, `inputs[]`, `item`) plus `config`. |
 | stdout | Exactly one UTF-8 Result JSON object: `{"message": "...", "data": ...}`. `message` must be text; `data` may be null. `NaN`/`Infinity` are not JSON and are rejected. |
 | stderr | Logs. |

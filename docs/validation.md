@@ -2,7 +2,7 @@
 
 ## Issue #82: smaller node execution context
 
-On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 108 deterministic tests; `git diff --check` passed. Runtime and Command tests verify that Agent and Command Nodes receive only `request`, `github_repository`, `run_input`, `item` and `inputs[]` entries of `node_id`/`commit`/`message`/`data` (Commands also `config`), while attempt notes still record Run ID, instance ID, fan-out origin, the resolved workspace base, and full inputs including instance IDs and validation flags. Control flow still uses the internal validation flag. Adapter tests check the updated preamble.
+On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 109 deterministic tests; `git diff --check` passed. Runtime and Command tests verify that Agent and Command Nodes receive only `request`, `github_repository`, `run_input`, `item` and `inputs[]` entries of `node_id`/`commit`/`message`/`data` (Commands also `config`), while attempt notes still record Run ID, instance ID, fan-out origin, the resolved workspace base, and full inputs including instance IDs and validation flags. Control flow still uses the internal validation flag. Each attempt, including a retry, receives a fresh copy of the original context, so node-side mutation cannot leak into retries, downstream inputs or notes. Adapter tests check the updated preamble.
 
 ## Issue #84: max_steps counts node invocations
 
