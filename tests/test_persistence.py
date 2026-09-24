@@ -201,6 +201,9 @@ class PersistenceTests(unittest.TestCase):
             destination(storage, record)
         self.assertEqual(destination(storage, record, "git@example.test:repo.git"), "git@example.test:repo.git")
         self.assertEqual(destination(storage, {"github_repository": "other/repo"}), "https://github.com/other/repo.git")
+        self.assertEqual(destination(storage, {"github_repository": "Owner/Artifact",
+                                               "publication_repositories": ["owner/artifact"]}),
+                         "https://github.com/Owner/Artifact.git")
 
     def test_actual_publication_destinations(self):
         def publish(repository):

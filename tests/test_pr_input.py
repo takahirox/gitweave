@@ -502,7 +502,11 @@ class RepositoryWorkflowTests(unittest.TestCase):
         self.assertFalse((self.root / ".gitweave").exists())
 
     def test_local_commit_flow(self):
-        run = Runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), self.remote, self.head, "request", adapters={"codex": Fake(lambda *args: Result())})
+        def work(n, c, w):
+            self.assertIsNone(c["github_repository"])
+            self.assertEqual(c["run_input"], {"kind": "commit", "commit": self.head})
+            return Result()
+        run = Runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), self.remote, self.head, "request", adapters={"codex": Fake(work)})
         self.assertEqual(run.run()["status"], "completed")
         self.assertEqual(run.record["run_input"], {"kind": "commit", "commit": self.head})
         self.assertIsNone(run.record["github_repository"])
