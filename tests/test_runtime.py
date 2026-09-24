@@ -363,6 +363,14 @@ class RuntimeTests(unittest.TestCase):
                 record = run.run()
                 self.assertEqual(record["failure"]["kind"], "loop")
                 self.assertEqual(record["steps"], 1)
+        # A sibling's invocations share the counter; the Run still terminates.
+        spin = {"loop": {"flow": [empty_if], "while": {"path": "/0/data", "equals": True}}}
+        for max_steps in (3, 100):
+            with self.subTest(sibling_budget=max_steps):
+                record = self.runtime({"start": node(schema={"type": "boolean"}), "a": node()},
+                                      ["start", {"parallel": [[spin], ["a", "a"]]}],
+                                      lambda *a: Result(data=True), max_steps=max_steps, concurrency=2).run()
+                self.assertIn(record["failure"]["kind"], ("loop", "step_limit"))
 
     def test_retryability_flag_controls_retries_regardless_of_kind(self):
         for retryable in (False, True):

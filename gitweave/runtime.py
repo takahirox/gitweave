@@ -132,8 +132,8 @@ class Runtime:
                         inputs = await self.flow(spec["flow"], inputs, item, origin)
                         if not self.matches(inputs, spec["while"]):
                             break
-                        # Without a node invocation the inputs, and so the condition,
-                        # cannot change. (Invocations elsewhere still consume max_steps.)
+                        # Without a node invocation the condition's result cannot change.
+                        # (Invocations elsewhere still consume max_steps, so this terminates.)
                         if self.steps == invoked:
                             raise Failure("loop", "Loop iteration invoked no node while its condition still matches")
             return inputs
