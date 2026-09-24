@@ -49,6 +49,8 @@ Git therefore becomes the artifact handoff mechanism between nodes and provides 
 
 > One node invocation produces one checkpoint commit.
 
+With retries, each attempt gets its own commit; a failed attempt's commit records the failure and is not a completed-node boundary (see the [runtime guide](docs/runtime.md#git-records)).
+
 The output commit is not only an artifact snapshot. It is also the execution checkpoint for that invocation:
 
 - it captures the artifact state after the node invocation
