@@ -6,8 +6,8 @@ def destination(git, record, remote=None):
     if remote is not None:
         return remote
     repositories = set(record.get("publication_repositories", []))
-    if record.get("input_pr"):
-        repositories.add(record["input_pr"]["repository"])
+    if record.get("github_repository"):
+        repositories.add(record["github_repository"])
     if len(repositories) > 1:
         raise Failure("persistence", "Multiple artifact repositories require --provenance-remote selection")
     if repositories:

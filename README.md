@@ -149,6 +149,9 @@ gitweave run --graph examples/single.json --repo /path/to/repo --commit HEAD "Im
 
 # Start from an existing GitHub PR
 gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10 "Review, fix, and merge this PR"
+
+# Start from a GitHub Issue; nodes receive run_input {"kind": "issue", "number": 123}
+gitweave run --graph graph.json --repo owner/repo --issue 123 "Implement this Issue"
 ```
 
 See the [runtime guide](docs/runtime.md) for graph syntax, parallel execution, fan-out, review/fix loops, Git records, explicit PR actions, and validation. [The parallel example](examples/parallel.json) combines both providers in one graph.

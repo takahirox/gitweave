@@ -273,14 +273,16 @@ class InputActionTests(unittest.TestCase):
 
 class CLITests(unittest.TestCase):
     def test_both_cli_input_modes(self):
-        for flags, commit, pr in ((["--commit", "HEAD"], "HEAD", None), (["--pr", "10"], None, 10)):
+        for flags, commit, pr, issue in ((["--commit", "HEAD"], "HEAD", None, None), (["--pr", "10"], None, 10, None),
+                                         (["--issue", "123"], None, None, 123)):
             with self.subTest(flags=flags), patch("sys.argv", ["gitweave", "run", "--graph", "graph.json", "--repo", "owner/repo", *flags, "request"]), patch("gitweave.cli.Runtime") as runtime, patch.object(Path, "read_text", return_value="graph"), patch("sys.stdout", new_callable=io.StringIO):
                 runtime.return_value.run.return_value = dict(run_id="run", status="completed", repository="storage", run_ref="ref", notes_ref="notes", outputs=[])
                 self.assertEqual(main(), 0)
-                runtime.assert_called_once_with("graph", "owner/repo", commit, "request", pr=pr, provenance_remote=None)
+                runtime.assert_called_once_with("graph", "owner/repo", commit, "request", pr=pr, issue=issue, provenance_remote=None)
 
     def test_cli_requires_one_input(self):
-        for flags in ([], ["--commit", "HEAD", "--pr", "10"]):
+        for flags in ([], ["--commit", "HEAD", "--pr", "10"], ["--commit", "HEAD", "--issue", "1"],
+                      ["--pr", "10", "--issue", "1"], ["--issue", "x"]):
             with patch("sys.argv", ["gitweave", "run", "--graph", "g", "--repo", "r", *flags, "request"]), patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
                 main()
 
@@ -355,17 +357,21 @@ class RepositoryWorkflowTests(unittest.TestCase):
             seen.append(c)
             self.assertEqual(git(w, "rev-parse", "HEAD"), self.head)
             self.assertEqual((w / "artifact").read_text(), "needs fix")
-            self.assertEqual(git(w, "rev-parse", c["input_pr"]["base_sha"]), self.base)
-            c["input_pr"]["head_branch"] = "cannot mutate runtime metadata"
+            self.assertEqual(c["run_input"], {"kind": "pull_request", "number": 10})
+            self.assertNotIn("input_pr", c)
+            self.assertNotIn("pr_remote_sha", c)
+            c["run_input"]["number"] = 11
             return Result()
         run = self.runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), work)
         record = run.run()
         self.assertEqual(record["status"], "completed", record.get("failure"))
         self.assertEqual(record["base_commit"], self.head)
-        self.assertEqual(record["input_pr"]["head_branch"], "topic")
+        self.assertEqual(record["run_input"], {"kind": "pull_request", "number": 10})
+        self.assertEqual(record["github_repository"], "owner/repo")
+        self.assertNotIn("input_pr", record)
         self.assertEqual(record["pr_remote_sha"], self.head)
         retained = json.loads(git(run.git.repo, "show", record["run_ref"] + ":run.json"))
-        self.assertEqual(retained["input_pr"], record["input_pr"])
+        self.assertEqual(retained["run_input"], record["run_input"])
         self.assertEqual(git(run.git.repo, "rev-parse", f"refs/gitweave/{run.id}/input/base"), self.base)
         self.assertEqual(git(self.remote, "rev-parse", "HEAD"), self.base)
 
@@ -375,9 +381,7 @@ class RepositoryWorkflowTests(unittest.TestCase):
             def work(n, c, w):
                 self.assertEqual(git(w, "rev-parse", "HEAD"), self.head)
                 self.assertEqual((w / "artifact").read_text(), "needs fix")
-                self.assertEqual(c["input_pr"]["head_sha"], self.head)
-                self.assertEqual(c["input_pr"]["base_sha"], self.base)
-                self.assertEqual(c["pr_remote_sha"], self.head)
+                self.assertEqual(c["workspace_base"], self.head)
                 return Result()
             run = self.runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), work)
             git(self.remote, "update-ref", "refs/pull/10/head", self.base)
@@ -388,7 +392,6 @@ class RepositoryWorkflowTests(unittest.TestCase):
         self.assertEqual(record["status"], "completed", record.get("failure"))
         self.assertEqual(record["base_commit"], self.head)
         for name, commit in (("head", self.head), ("base", self.base)):
-            self.assertEqual(record["input_pr"][name + "_sha"], commit)
             self.assertEqual(git(run.git.repo, "rev-parse",
                                  f"refs/gitweave/{run.id}/input/{name}"), commit)
 
@@ -397,8 +400,7 @@ class RepositoryWorkflowTests(unittest.TestCase):
         def work(n, c, w):
             if "schema" in n:
                 calls.append("review")
-                self.assertEqual(c["input_pr"]["base_sha"], self.base)
-                self.assertEqual(c["pr_remote_sha"], git(self.remote, "rev-parse", "topic"))
+                self.assertEqual(c["run_input"], {"kind": "pull_request", "number": 10})
                 approved = (w / "artifact").read_text() == "fixed"
                 return Result(data={"approved": approved, "findings": [] if approved else ["Fix artifact"]})
             calls.append("fix")
@@ -465,7 +467,40 @@ class RepositoryWorkflowTests(unittest.TestCase):
                                      "refs/heads/topic"), self.base if change == "move" else "")
                 self.assertEqual(record["pr_remote_sha"], self.head)
 
+    def test_issue_input_starts_from_default_branch_without_reading_the_issue(self):
+        git(self.remote, "checkout", "-q", "topic")  # the remote default branch
+        seen = []
+        def work(n, c, w):
+            seen.append(c["run_input"])
+            self.assertEqual(git(w, "rev-parse", "HEAD"), self.head)
+            self.assertNotIn("input_pr", c)
+            return Result()
+        with patch.object(GitHubActions, "gh", side_effect=AssertionError("no GitHub API access")):
+            run = Runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), "owner/repo", None, "request",
+                          issue=123, adapters={"codex": Fake(work)})
+            git(self.remote, "update-ref", "refs/heads/topic", self.base)  # later moves do not change the Run
+            record = run.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual(seen, [{"kind": "issue", "number": 123}])
+        self.assertEqual(record["base_commit"], self.head)
+        self.assertEqual(record["run_input"], {"kind": "issue", "number": 123})
+        self.assertEqual(git(run.git.repo, "rev-parse", f"refs/gitweave/{run.id}/input/base"), self.head)
+        # Provenance belongs to the Run repository.
+        self.assertEqual(record["provenance_destination"], "https://github.com/owner/repo.git")
+        self.assertEqual(json.loads(git(self.remote, "show", record["run_ref"] + ":run.json")), record)
+
+    def test_issue_input_contract(self):
+        text = graph({"work": node()}, ["work"])
+        for repo, commit, kwargs in (("/tmp/repo", None, {"issue": 1}), ("owner/repo", "HEAD", {"issue": 1}),
+                                     ("owner/repo", None, {"issue": 0}), ("owner/repo", None, {"issue": -1}),
+                                     ("owner/repo", None, {"issue": True}), ("owner/repo", None, {"issue": "1"}),
+                                     ("owner/repo", None, {"issue": 1, "pr": 10})):
+            with self.subTest(repo=repo, commit=commit, kwargs=kwargs), self.assertRaises(Failure):
+                Runtime(text, repo, commit, "request", **kwargs)
+        self.assertFalse((self.root / ".gitweave").exists())
+
     def test_local_commit_flow(self):
         run = Runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), self.remote, self.head, "request", adapters={"codex": Fake(lambda *args: Result())})
         self.assertEqual(run.run()["status"], "completed")
-        self.assertIsNone(run.record["input_pr"])
+        self.assertEqual(run.record["run_input"], {"kind": "commit", "commit": self.head})
+        self.assertIsNone(run.record["github_repository"])

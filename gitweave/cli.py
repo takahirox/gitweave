@@ -18,6 +18,7 @@ def main():
     source = run.add_mutually_exclusive_group(required=True)
     source.add_argument("--commit")
     source.add_argument("--pr", type=int)
+    source.add_argument("--issue", type=int)
     run.add_argument("request")
     run.add_argument("--provenance-remote")
     args = parser.parse_args()
@@ -26,7 +27,7 @@ def main():
             validate_graph(json.loads(args.graph.read_text()))
             print(f"Graph passes static validation: {args.graph}")
             return 0
-        record = Runtime(args.graph.read_text(), args.repo, args.commit, args.request, pr=args.pr, provenance_remote=args.provenance_remote).run()
+        record = Runtime(args.graph.read_text(), args.repo, args.commit, args.request, pr=args.pr, issue=args.issue, provenance_remote=args.provenance_remote).run()
         print(json.dumps({key: record[key] for key in ("run_id", "status", "repository", "run_ref", "notes_ref", "outputs")}, indent=2))
         if record["status"] != "completed":
             print(json.dumps(record["failure"]), file=sys.stderr)

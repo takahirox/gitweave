@@ -50,7 +50,7 @@ GitWeave continues to use Claude's non-interactive `-p` invocation without chang
 
 The dedicated worktree remains the official artifact boundary in every mode: agents must leave final files there. The common Codex/Claude prompt contains only this node/worktree context, the node's declared instruction, and serialized execution inputs labeled as data. GitWeave does not add behavioral directives about publication, usage limits, provider switching, or task approval. Graph authors are responsible for task-specific instructions. Agent subprocesses inherit the parent environment unchanged. A worktree is not an OS security boundary.
 
-The adapter receives a context containing the request, input commits/messages/data, selected workspace-base commit, and any fan-out item. Both agents and actions also receive `instance_id`, the same invocation identity recorded in attempt provenance: stable across retries, distinct across loop iterations and fan-out items. It must return a `Result`; provider-native events, stderr, session IDs, usage and cost fields are preserved when available. No token/cost estimates are invented. The configured model/effort and raw events retain both requested and provider-reported information.
+The adapter receives a context containing the request, `run_input`, input commits/messages/data, selected workspace-base commit, and any fan-out item. `run_input` is the Run's lightweight source identity with a `kind` discriminator: `{"kind": "commit", "commit": SHA}`, `{"kind": "pull_request", "number": N}`, or `{"kind": "issue", "number": N}`. The repository is part of the Run and is not repeated there. GitWeave does not embed Issue or PR content in node context; nodes read it themselves when the graph needs it. Both agents and actions also receive `instance_id`, the same invocation identity recorded in attempt provenance: stable across retries, distinct across loop iterations and fan-out items. It must return a `Result`; provider-native events, stderr, session IDs, usage and cost fields are preserved when available. No token/cost estimates are invented. The configured model/effort and raw events retain both requested and provider-reported information.
 
 An optional `schema` validates `data`. The supported JSON Schema subset is `type` (object, array, string, integer, number, boolean, null), `properties`, `required`, boolean `additionalProperties`, `items`, `enum`, and `description`. Unknown keywords are rejected. Provider-specific schema restrictions also apply; for portable structured outputs use fully specified objects with `required` and `additionalProperties: false`, as in the examples. Both adapters request an envelope containing a human-readable `message` plus `data`.
 
@@ -161,18 +161,19 @@ gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10 \
   "Review this PR, fix remaining problems, and merge it when clean."
 ```
 
-The input modes are deliberately small and mutually exclusive:
+The input modes are deliberately small and mutually exclusive (`--commit`, `--pr`, `--issue`):
 
 - `--repo /path/to/local/repository --commit COMMIT` preserves the existing local input flow.
 - `--repo owner/repo --pr NUMBER` accepts a positive PR number on github.com. PR URLs, other hosts, and local checkout paths with `--pr` are not supported. A relative `owner/repo` string in PR mode always means a GitHub identity, even if a directory with that name exists.
+- `--repo owner/repo --issue NUMBER` starts an Issue-driven Run; see below.
 
-PR mode creates a persistent bare object store at `.gitweave/runs/<run-id>/repository.git` under the invoking directory. The CLI includes its absolute `repository` path in its output; use `git -C PATH show RUN_REF:run.json` to inspect it. The store is retained for artifact/history access, including when execution fails, and is not automatically deleted. Initialization failures may leave a partial store. No local clone is required, and no existing checkout is modified by initialization.
+PR and Issue modes create a persistent bare object store at `.gitweave/runs/<run-id>/repository.git` under the invoking directory. The CLI includes its absolute `repository` path in its output; use `git -C PATH show RUN_REF:run.json` to inspect it. The store is retained for artifact/history access, including when execution fails, and is not automatically deleted. Initialization failures may leave a partial store. No local clone is required, and no existing checkout is modified by initialization.
 
 Initialization reads the open PR metadata once, fetches `refs/pull/<number>/head` from its base repository, and fetches the resolved base commit. It never starts from GitHub's synthetic merge commit. The actual fetched commits are recorded as the Run's head/base SHAs and retained under `refs/gitweave/<run-id>/input/{head,base}` before scheduling nodes. Initialization does not compare the fetched head with the earlier API value or reread metadata to detect changes during fetching. Execution uses these frozen commits; later PR actions check the current PR state when they execute.
 
-`run.json.input_pr` and every node's `context.input_pr` expose the initial `number`, base `repository` and `repository_id`, `head_repository` and `head_repository_id` (nullable if deleted), `head_branch`, `head_sha`, `base_branch`, `base_sha`, `url`, `state`, and `merge_commit`. Only these selected fields are retained, not the raw API response or authentication material. `base_sha` is the frozen review comparison commit, not a moving branch name. Ordinary advancement of the same base branch after initialization is allowed; retargeting to another branch is a conflict. GitHub remains responsible for current mergeability and repository policy.
+`run.json.run_input` and every node's `context.run_input` are `{"kind": "pull_request", "number": N}`, and `run.json.github_repository` records `owner/repo`. The PR metadata read at initialization is kept only inside the runtime for `sync_pr`/`merge_pr` checks; it is not a node-context field. The frozen head and base commits remain available through the input refs above. Ordinary advancement of the same base branch after initialization is allowed; retargeting to another branch is a conflict. GitHub remains responsible for current mergeability and repository policy.
 
-The initial `head_sha` stays immutable. `pr_remote_sha` in node context and the Run record tracks the last successfully verified remote head separately from local artifact/checkpoint commits. Nodes receive the current selected artifact in `workspace_base` as usual. Action result commits are provenance checkpoints, not necessarily the pushed SHA.
+The initial head stays immutable. `pr_remote_sha` in the Run record tracks the last successfully verified remote head separately from local artifact/checkpoint commits. Nodes receive the current selected artifact in `workspace_base` as usual. Action result commits are provenance checkpoints, not necessarily the pushed SHA.
 
 `sync_pr` requires existing-PR input, `workspace_base`, and empty/omitted `config`:
 
@@ -193,6 +194,16 @@ Codex and Claude Agent Node subprocesses inherit the parent process environment 
 GitWeave remains a thin runtime, not a general credential or environment sandbox. The assigned worktree defines official artifact state. Graphs can use explicit System Actions for publication; task-specific agent behavior is defined by the node's instruction. Any future environment restriction should address a concrete observed problem with the smallest necessary change.
 
 Runtime-owned GitHub System Actions retain their existing parent-environment copy and fixed `GH_HOST=github.com` behavior. The runtime Git wrapper's existing environment handling is unchanged. Worktrees share a Git object store; GitWeave does not require Docker or disable native permission checks.
+
+## GitHub Issue input
+
+```sh
+gitweave run --graph graph.json --repo owner/repo --issue 123 "Implement this Issue"
+```
+
+`--issue NUMBER` accepts a positive integer and uses the same `owner/repo` rules and bare object store as PR mode. GitWeave records the number verbatim as `run_input: {"kind": "issue", "number": 123}` and exposes it in every node's context. It does not verify that the Issue exists, fetch its title/body/state, or interpret it; the Graph decides how nodes read and process the Issue (for example, an Agent instructed to read it with available tools). The same graph can be reused for different Issues.
+
+The Run base is the remote default branch HEAD, fetched once from `https://github.com/OWNER/REPO.git` at initialization and retained as `refs/gitweave/<run-id>/input/base`. Later branch movement does not change the Run. The Run's checkpoint commits, notes and refs are persisted to that same repository unless `--provenance-remote` overrides it.
 
 ## Validation and live smoke
 
@@ -217,7 +228,7 @@ branches, tags and other Runs are unchanged. Merging or deleting an artifact bra
 does not delete these refs.
 
 Destination selection uses `run --provenance-remote REMOTE_OR_URL` when supplied.
-Otherwise, selection happens at finalization using the input PR repository and
+Otherwise, selection happens at finalization using the Run's GitHub repository (`--pr` or `--issue`) and
 the repositories of `publish_pr` invocations that actually started, whether they
 succeeded or failed. Unexecuted nodes do not contribute. One distinct repository
 is used (`https://github.com/OWNER/REPO.git`), falling back to local `origin` when

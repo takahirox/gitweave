@@ -24,14 +24,17 @@ def now():
 
 
 class Runtime:
-    def __init__(self, graph_text, repo, commit, request, *, adapters=None, actions=None, pr=None, provenance_remote=None):
+    def __init__(self, graph_text, repo, commit, request, *, adapters=None, actions=None, pr=None, issue=None, provenance_remote=None):
         self.graph = validate_graph(json.loads(graph_text))
         self.id = uuid.uuid4().hex
-        if pr is not None:
-            if commit is not None or type(pr) is not int or pr <= 0:
-                raise Failure("pr_input", "Use a positive PR number without --commit")
+        self.github_repository = None
+        if pr is not None or issue is not None:
+            source, number = ("pr_input", pr) if pr is not None else ("issue_input", issue)
+            if commit is not None or (pr is not None and issue is not None) or type(number) is not int or number <= 0:
+                raise Failure(source, "Use one positive PR or Issue number without --commit")
             if not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", str(repo)) or str(repo).split("/")[1] in (".", ".."):
-                raise Failure("pr_input", "--pr requires a GitHub owner/repo identity, not a checkout path")
+                raise Failure(source, "--pr and --issue require a GitHub owner/repo identity, not a checkout path")
+            self.github_repository = str(repo)
             storage = Path.cwd() / ".gitweave" / "runs" / self.id / "repository.git"
             self.git = Git(storage, self.id, initialize=True)
         else:
@@ -39,12 +42,23 @@ class Runtime:
                 raise Failure("input", "A local repository requires --commit")
             self.git = Git(repo, self.id)
         self.actions = actions if actions is not None else GitHubActions(self.git, self.id)
-        self.input_pr = self.actions.resolve_input(str(repo), pr) if pr is not None else None
-        self.base = self.input_pr["head_sha"] if self.input_pr else self.git.resolve(commit)
+        if pr is not None:
+            self.base = self.actions.resolve_input(self.github_repository, pr)["head_sha"]
+            self.run_input = {"kind": "pull_request", "number": pr}
+        elif issue is not None:
+            # The Issue is only identity; nodes read it. The base is the default branch HEAD.
+            self.git.command("fetch", "--no-tags", f"https://github.com/{self.github_repository}.git", "HEAD")
+            self.base = self.git.resolve("FETCH_HEAD")
+            self.git.command("update-ref", f"refs/gitweave/{self.id}/input/base", self.base)
+            self.run_input = {"kind": "issue", "number": issue}
+        else:
+            self.base = self.git.resolve(commit)
+            self.run_input = {"kind": "commit", "commit": self.base}
         self.adapters = adapters if adapters is not None else {name: CLIAdapter(name) for name in ("codex", "claude")}
         self.record = {"version": 1, "run_id": self.id, "repository": str(self.git.repo),
-                       "base_commit": self.base, "input_pr": self.input_pr,
-                       "pr_remote_sha": self.input_pr["head_sha"] if self.input_pr else None,
+                       "github_repository": self.github_repository,
+                       "base_commit": self.base, "run_input": self.run_input,
+                       "pr_remote_sha": getattr(self.actions, "remote_sha", None),
                        "request": request, "graph": graph_text,
                        "graph_digest": hashlib.sha256(graph_text.encode()).hexdigest(),
                        "started_at": now(), "status": "running", "attempts": [], "outputs": []}
@@ -67,8 +81,7 @@ class Runtime:
     def context(self, inputs, item, origin, base):
         return {"run_id": self.id, "request": self.record["request"], "inputs": inputs,
                 "item": item, "fan_out_origin": origin, "workspace_base": base,
-                "input_pr": copy.deepcopy(self.input_pr),
-                "pr_remote_sha": getattr(self.actions, "remote_sha", None)}
+                "run_input": copy.deepcopy(self.run_input)}
 
     @staticmethod
     def control_value(inputs, path):

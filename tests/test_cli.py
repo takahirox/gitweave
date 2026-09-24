@@ -125,7 +125,7 @@ class CLITests(unittest.TestCase):
                 code, stdout, stderr = self.invoke("run", "--graph", self.path, "--repo", self.directory,
                                                    "--commit", "HEAD", "request")
                 runtime.assert_called_once_with(self.path.read_text(), str(self.directory), "HEAD", "request",
-                                                pr=None, provenance_remote=None)
+                                                pr=None, issue=None, provenance_remote=None)
                 self.assertEqual(code, 0 if status == "completed" else 1)
                 self.assertEqual(json.loads(stdout), {key: record[key] for key in
                                                      ("run_id", "status", "repository", "run_ref", "notes_ref", "outputs")})
@@ -140,7 +140,7 @@ class CLITests(unittest.TestCase):
                 "run", "--graph", self.path, "--repo", "owner/repo", "--pr", "8",
                 "--provenance-remote", "origin", "request")
             runtime.assert_called_once_with(self.path.read_text(), "owner/repo", None, "request",
-                                            pr=8, provenance_remote="origin")
+                                            pr=8, issue=None, provenance_remote="origin")
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(stdout), record)
             self.assertEqual(stderr, "")
