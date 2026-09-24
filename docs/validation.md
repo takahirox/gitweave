@@ -1,5 +1,9 @@
 # v0 validation evidence
 
+## Issue #85: optional Run request
+
+On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 111 deterministic tests; `git diff --check` passed. CLI tests run `--issue`, `--pr` and `--commit` Runs without a request and verify `Runtime` receives `None`; existing tests still pass a request through unchanged. Runtime tests verify that an omitted request is `null` in `run.json`, every node context, and the Run-base input message, and that a supplied request reaches nodes unchanged. The Agent preamble describes `request` as optional operator guidance.
+
 ## Issue #82: smaller node execution context
 
 On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 109 deterministic tests; `git diff --check` passed. Runtime and Command tests verify that Agent and Command Nodes receive only `request`, `github_repository`, `run_input`, `item` and `inputs[]` entries of `node_id`/`commit`/`message`/`data` (Commands also `config`), while attempt notes still record Run ID, instance ID, fan-out origin, the resolved workspace base, and full inputs including instance IDs and validation flags. Control flow still uses the internal validation flag. Each attempt, including a retry, receives a fresh copy of the original context, so node-side mutation cannot leak into retries, downstream inputs or notes. Adapter tests check the updated preamble.

@@ -24,7 +24,7 @@ def now():
 
 
 class Runtime:
-    def __init__(self, graph_text, repo, commit, request, *, adapters=None, pr=None, issue=None, provenance_remote=None):
+    def __init__(self, graph_text, repo, commit, request=None, *, adapters=None, pr=None, issue=None, provenance_remote=None):
         self.graph = validate_graph(json.loads(graph_text))
         self.id = uuid.uuid4().hex
         self.github_repository = None

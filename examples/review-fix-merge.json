@@ -6,7 +6,7 @@
     "review": {
       "kind": "agent",
       "provider": "codex",
-      "instruction": "Review the selected artifact against the request and the base branch of the pull request identified by run_input in github_repository. Inspect the full diff and run relevant deterministic tests. Leave files unchanged. Set approved=true only when no concrete findings remain; otherwise return actionable findings. Do not push, merge, or post comments.",
+      "instruction": "Review the selected artifact, the head of the pull request identified by run_input in github_repository, against that pull request's description and base branch, plus the operator request if one is given. Inspect the full diff and run relevant deterministic tests. Leave files unchanged. Set approved=true only when no concrete findings remain; otherwise return actionable findings. Do not push, merge, or post comments.",
       "schema": {
         "type": "object",
         "properties": {

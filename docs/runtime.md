@@ -6,6 +6,8 @@ Supports Linux and macOS. Requires Python 3.11+, Git, and the `codex` and/or `cl
 gitweave run --graph examples/single.json --repo /path/to/repository --commit HEAD "Implement the requested change"
 ```
 
+The trailing free-form request is optional. When supplied, nodes receive it as additional operator guidance (`request`, and as the `message` of the Run-base input). When omitted, it is `null` in node context and `run.json`, and nodes rely on their Graph instructions and `run_input`; this works for `--commit`, `--pr` and `--issue` Runs alike. The `single` and `parallel` examples are request-driven (their instructions implement or plan the supplied request), so pass one with them; the PR and Issue examples work without one.
+
 The original checkout is not an output workspace. Each invocation receives an isolated detached worktree; inspect the returned terminal commit(s) to use its artifacts. Existing uncommitted files in the original checkout are not inputs. Local refs and notes retain Run and attempt history without a database. A successful Run means the graph executed normally, not that the task was approved.
 
 ## Graph contract
@@ -50,7 +52,7 @@ GitWeave continues to use Claude's non-interactive `-p` invocation without chang
 
 The dedicated worktree remains the official artifact boundary in every mode: agents must leave final files there. The common Codex/Claude prompt contains a short node-contract preamble, the node's declared instruction, and serialized execution inputs labeled as data. The preamble only explains the contract: the worktree (checked out at the selected upstream commit) is the artifact boundary checkpointed as the node's commit; `github_repository`, `run_input`, `request`, `inputs[]` (upstream node ID, checkpoint commit, message and data) and `item` mean what this guide describes; and the final message/data is the Result, the only non-file output passed downstream, so it should include any state later nodes need. Its exact wording is an implementation detail. GitWeave does not add behavioral directives about publication, usage limits, provider switching, or task approval. Graph authors are responsible for task-specific instructions. Agent subprocesses inherit the parent environment unchanged. A worktree is not an OS security boundary.
 
-The adapter receives a deliberately small, task-relevant context: `request`, `github_repository`, `run_input`, `inputs[]` (each upstream output's `node_id`, checkpoint `commit`, `message` and `data`; the Run base input has `node_id: null`), and the fan-out `item` (or `null`). Runtime-internal details (Run ID, invocation/instance IDs, fan-out origin, the selected workspace-base commit, and schema-validation flags) are not exposed to nodes; they remain in attempt provenance and the Run record. The worktree's `HEAD` is the selected workspace base. `run_input` is the Run's lightweight source identity with a `kind` discriminator: `{"kind": "commit", "commit": SHA}`, `{"kind": "pull_request", "number": N}`, or `{"kind": "issue", "number": N}`. The repository is part of the Run and is not repeated there; nodes receive it separately as `github_repository` (`owner/repo` for `--pr`/`--issue` Runs, `null` for local Runs). GitWeave does not embed Issue or PR content in node context; nodes read it themselves when the graph needs it. The adapter must return a `Result`; provider-native events, stderr, session IDs, usage and cost fields are preserved when available. No token/cost estimates are invented. The configured model/effort and raw events retain both requested and provider-reported information.
+The adapter receives a deliberately small, task-relevant context: `request` (optional operator guidance, `null` when omitted), `github_repository`, `run_input`, `inputs[]` (each upstream output's `node_id`, checkpoint `commit`, `message` and `data`; the Run base input has `node_id: null`), and the fan-out `item` (or `null`). Runtime-internal details (Run ID, invocation/instance IDs, fan-out origin, the selected workspace-base commit, and schema-validation flags) are not exposed to nodes; they remain in attempt provenance and the Run record. The worktree's `HEAD` is the selected workspace base. `run_input` is the Run's lightweight source identity with a `kind` discriminator: `{"kind": "commit", "commit": SHA}`, `{"kind": "pull_request", "number": N}`, or `{"kind": "issue", "number": N}`. The repository is part of the Run and is not repeated there; nodes receive it separately as `github_repository` (`owner/repo` for `--pr`/`--issue` Runs, `null` for local Runs). GitWeave does not embed Issue or PR content in node context; nodes read it themselves when the graph needs it. The adapter must return a `Result`; provider-native events, stderr, session IDs, usage and cost fields are preserved when available. No token/cost estimates are invented. The configured model/effort and raw events retain both requested and provider-reported information.
 
 An optional `schema` validates `data`. The supported JSON Schema subset is `type` (object, array, string, integer, number, boolean, null), `properties`, `required`, boolean `additionalProperties`, `items`, `enum`, and `description`. Unknown keywords are rejected. Provider-specific schema restrictions also apply; for portable structured outputs use fully specified objects with `required` and `additionalProperties: false`, as in the examples. Both adapters request an envelope containing a human-readable `message` plus `data`.
 
@@ -138,8 +140,7 @@ credential helpers apply normally, and Git failures retain their diagnostics.
 ## Existing Pull Request input
 
 ```sh
-gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10 \
-  "Review this PR, fix remaining problems, and merge it when clean."
+gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10
 ```
 
 The input modes are deliberately small and mutually exclusive (`--commit`, `--pr`, `--issue`):
@@ -163,7 +164,7 @@ GitWeave remains a thin runtime, not a general credential or environment sandbox
 ## GitHub Issue input
 
 ```sh
-gitweave run --graph graph.json --repo owner/repo --issue 123 "Implement this Issue"
+gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123
 ```
 
 `--issue NUMBER` accepts a positive integer and uses the same `owner/repo` rules and bare object store as PR mode. GitWeave records the number verbatim as `run_input: {"kind": "issue", "number": 123}` and exposes it in every node's context. It does not verify that the Issue exists, fetch its title/body/state, or interpret it; the Graph decides how nodes read and process the Issue (for example, an Agent instructed to read it with available tools). The same graph can be reused for different Issues.

@@ -19,7 +19,7 @@ def main():
     source.add_argument("--commit")
     source.add_argument("--pr", type=int)
     source.add_argument("--issue", type=int)
-    run.add_argument("request")
+    run.add_argument("request", nargs="?", help="Optional additional operator guidance for nodes")
     run.add_argument("--provenance-remote")
     args = parser.parse_args()
     try:

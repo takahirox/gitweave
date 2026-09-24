@@ -144,6 +144,17 @@ class CLITests(unittest.TestCase):
             self.assertEqual(json.loads(stdout), record)
             self.assertEqual(stderr, "")
 
+    def test_run_request_is_optional(self):
+        for source, expected in ((["--issue", "7"], {"pr": None, "issue": 7}), (["--pr", "8"], {"pr": 8, "issue": None}),
+                                 (["--commit", "HEAD"], {"pr": None, "issue": None})):
+            with self.subTest(source=source), patch.object(cli, "Runtime") as runtime:
+                runtime.return_value.run.return_value = dict(run_id="id", status="completed", repository="r",
+                                                             run_ref="run", notes_ref="notes", outputs=[])
+                code, stdout, stderr = self.invoke("run", "--graph", self.path, "--repo", "owner/repo", *source)
+                self.assertEqual((code, stderr), (0, ""))
+                runtime.assert_called_once_with(self.path.read_text(), "owner/repo", "HEAD" if "--commit" in source else None,
+                                                None, provenance_remote=None, **expected)
+
     def test_run_requires_exactly_one_commit_or_pr(self):
         for source, diagnostic in [([], "required"),
                                    (["--commit", "HEAD", "--pr", "8"], "not allowed")]:

@@ -150,11 +150,13 @@ python -m pip install .
 gitweave run --graph examples/single.json --repo /path/to/repo --commit HEAD "Implement the request"
 
 # Start from an existing GitHub PR
-gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10 "Review, fix, and merge this PR"
+gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10
 
 # Start from a GitHub Issue; nodes receive run_input {"kind": "issue", "number": 123}
-gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123 "Implement this Issue"
+gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123
 ```
+
+The trailing free-form request is optional. When the graph's instructions and `run_input` already define the work, omit it; when supplied, nodes receive it as additional operator guidance.
 
 See the [runtime guide](docs/runtime.md) for graph syntax, Command Nodes, parallel execution, fan-out, review/fix loops, Issue-driven development, Git records, and validation. [The parallel example](examples/parallel.json) combines both providers in one graph.
 
