@@ -10,7 +10,7 @@ The original checkout is not an output workspace. Each invocation receives an is
 
 ## Graph contract
 
-Version 1 uses JSON, with `version: 1`, a `nodes` object and a nonempty `flow` array. All node declarations have `kind`. The optional `workspace_base` selects the commit the node's worktree starts from: an upstream input index (starting at zero), or `"run"` for the Run's original commit. When omitted it defaults to `0`, the checkpoint commit of the node's first upstream input; set it explicitly only to choose another input or the Run base. Input ordering follows graph branch/item order, never completion order. Graph files, instructions and target repositories are trusted operator inputs.
+Version 1 uses JSON, with `version: 1`, a `nodes` object and a nonempty `flow` array. All node declarations have `kind`. The optional `workspace_base` selects the commit the node's worktree starts from: an upstream input index (starting at zero), or `"run"` for the Run's original commit. When omitted it defaults to `0`, the checkpoint commit of the node's first upstream input (for the first node of a Run, the Run's original commit); set it explicitly only to choose another input or the Run base. Input ordering follows graph branch/item order, never completion order. Graph files, instructions and target repositories are trusted operator inputs.
 
 Graph structure and node configuration are validated at Run initialization. Node-specific runtime requirements are checked only when the node executes: an unselected branch may contain an unregistered agent provider or a Command whose executable does not exist. If selected, the failure is retained in Run/attempt provenance. Run inputs themselves are resolved at initialization.
 
