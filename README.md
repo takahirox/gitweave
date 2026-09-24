@@ -45,9 +45,34 @@ A node receives one or more input commits, performs its work, and GitWeave check
 
 Git therefore becomes the artifact handoff mechanism between nodes and provides natural lineage, diffing, rollback, branching, and integration.
 
+### Checkpoint commits as execution identity
+
+> One node invocation produces one checkpoint commit.
+
+With retries, each attempt gets its own commit; a failed attempt's commit records the failure and is not a completed-node boundary (see the [runtime guide](docs/runtime.md#git-records)).
+
+The output commit is not only an artifact snapshot. It is also the execution checkpoint for that invocation:
+
+- it captures the artifact state after the node invocation
+- it gives the invocation a stable Git identity, even when the tree is unchanged
+- it is the natural point to attach the Git-note execution record
+- it makes the execution path inspectable after the fact
+- it supports later analysis of inputs, results, logs, model/provider usage, timing, and external effects
+- it provides a concrete, completed node boundary from which future resume/restart behavior can continue
+- it keeps execution history Git-native instead of requiring a separate database
+
+A node that changes no files, for example a reviewer or a node that only causes external side effects, therefore still gets its own same-tree (empty) checkpoint commit. That commit is intentional, not redundant: it records that the invocation occurred and completed at that point in the graph. Do not optimize it away.
+
+```text
+checkpoint commit → execution identity + artifact state at the node boundary
+Git note          → detailed execution metadata and structured Result
+```
+
+Resume is not implemented yet: v0 has no command to continue a Run after a process crash. Checkpoint commits and their attached provenance are designed so that such behavior can later start from a known completed node boundary.
+
 ### Git notes for execution results
 
-Git notes carry the execution information that does not belong in the file tree, such as:
+Git notes attached to each checkpoint commit carry the execution information that does not belong in the file tree, such as:
 
 - node results and structured messages
 - agent/model identity
