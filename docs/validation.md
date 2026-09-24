@@ -2,7 +2,7 @@
 
 ## Issue #85: optional Run request
 
-On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 111 deterministic tests; `git diff --check` passed. CLI tests run `--issue`, `--pr` and `--commit` Runs without a request and verify `Runtime` receives `None`; existing tests still pass a request through unchanged. Runtime tests verify that an omitted request is `null` in `run.json`, every node context, and the Run-base input message, that a supplied request reaches nodes unchanged. The Agent preamble describes `request` as optional operator guidance.
+On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 111 deterministic tests; `git diff --check` passed. CLI tests run `--issue`, `--pr` and `--commit` Runs without a request and verify `Runtime` receives `None`; existing tests still pass a request through unchanged. Runtime tests verify that an omitted request is `null` in `run.json`, every node context, and the Run-base input message, and that a supplied request reaches nodes unchanged. The Agent preamble describes `request` as optional operator guidance.
 
 ## Issue #82: smaller node execution context
 
