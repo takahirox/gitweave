@@ -1,5 +1,6 @@
 """Command Nodes run real local processes in their worktree; no network or live agents."""
 import json
+import sys
 from pathlib import Path
 import tempfile
 import time
@@ -11,7 +12,7 @@ from test_runtime import Fake, git, graph, node
 
 
 def command(script, **options):
-    return dict(kind="command", workspace_base=0, argv=["python3", "-c", script], **options)
+    return dict(kind="command", workspace_base=0, argv=[sys.executable, "-c", script], **options)
 
 
 ECHO = """import json, sys
@@ -66,7 +67,7 @@ class CommandNodeTests(unittest.TestCase):
         agent = self.note(run, record["attempts"][1]["commit"])
         self.assertEqual(set(agent) - {"argv", "config"}, set(cmd) - {"argv", "config"})
         self.assertEqual((cmd["kind"], cmd["argv"], cmd["config"], cmd["status"]),
-                         ("command", ["python3", "-c", write], {"key": ["value"]}, "completed"))
+                         ("command", [sys.executable, "-c", write], {"key": ["value"]}, "completed"))
         self.assertEqual(cmd["result"]["native"]["returncode"], 0)
         self.assertEqual(cmd["result"]["raw_stderr"], "log line\n")
         self.assertIn('"message": "done"', cmd["result"]["raw_stdout"])
@@ -97,6 +98,8 @@ class CommandNodeTests(unittest.TestCase):
             "missing data": ('print(\'{"message": "m"}\')', "must be one"),
             "extra field": ('print(\'{"message": "m", "data": 1, "x": 2}\')', "must be one"),
             "message not text": ('print(\'{"message": 1, "data": 1}\')', "must be one"),
+            "non-UTF-8": ('import sys; sys.stdout.buffer.write(b"\\xff\\xfe")', "not valid UTF-8"),
+            "NaN": ('print(\'{"message": "m", "data": NaN}\')', "must be one"),
             "schema failure": ('print(\'{"message": "m", "data": "text"}\')', "data must be object"),
         }
         for label, (script, diagnostic) in cases.items():

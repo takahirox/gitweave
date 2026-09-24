@@ -223,7 +223,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_sandbox_commands_preserve_boundary_and_inherit_environment(self):
         parent = {"HOME": "/fake/home", "CODEX_HOME": "/fake/codex",
-                  "OPENAI_API_KEY": "fake-native", "GH_TOKEN": "fake-system-action",
+                  "OPENAI_API_KEY": "fake-native", "GH_TOKEN": "fake-gh",
                   "GITHUB_TOKEN": "fake-github", "SSH_AUTH_SOCK": "/fake/socket",
                   "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraHeader",
                   "GIT_CONFIG_VALUE_0": "fake-authority"}
@@ -292,7 +292,7 @@ class AdapterTests(unittest.TestCase):
                  (None, True, False, 1, 1.5, [], {})]
         cases += [(provider, {"permission_mode": value}) for provider in ("codex", "custom")
                   for value in (None, "auto", "acceptEdits")]
-        cases += [("claude", {"kind": "action", "permission_mode": "auto"})]
+        cases += [("claude", {"kind": "command", "permission_mode": "auto"})]
         for provider, options in cases:
             with self.subTest(provider=provider, options=options), patch("gitweave.adapters.process") as invoke:
                 with self.assertRaises(Failure) as raised:

@@ -56,12 +56,12 @@
             "type": "boolean"
           },
           "merge_commit": {
-            "type": "string"
+            "type": "string",
+            "description": "Merge commit SHA; omit when not merged."
           }
         },
         "required": [
-          "merged",
-          "merge_commit"
+          "merged"
         ],
         "additionalProperties": false
       }

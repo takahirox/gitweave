@@ -14,7 +14,7 @@
       "provider": "claude",
       "workspace_base": 0,
       "retries": 0,
-      "instruction": "Create the pull request for the Issue identified by run_input in github_repository, or update it if inputs[0].data.pr already identifies one. Commit any uncommitted changes, push this worktree's HEAD to a branch, and write the title and body following the repository's conventions and pull request template, linking the Issue. Do not merge. Return the PR identity.",
+      "instruction": "Create the pull request for the Issue identified by run_input in github_repository, or update it if inputs[0].data.pr already identifies one, so that its head contains this worktree's changes. Follow the repository's conventions and pull request template for the branch, title and body, and link the Issue. Do not merge. Return the PR identity.",
       "schema": {
         "type": "object",
         "properties": {
@@ -173,13 +173,13 @@
             "type": "boolean"
           },
           "merge_commit": {
-            "type": "string"
+            "type": "string",
+            "description": "Merge commit SHA; omit when not merged."
           }
         },
         "required": [
           "pr",
-          "merged",
-          "merge_commit"
+          "merged"
         ],
         "additionalProperties": false
       }
