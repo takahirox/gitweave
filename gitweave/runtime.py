@@ -24,8 +24,10 @@ def now():
 
 
 class Runtime:
-    def __init__(self, graph_text, repo, commit, request, *, adapters=None, pr=None, issue=None, provenance_remote=None):
+    def __init__(self, graph_text, repo, commit, request=None, *, adapters=None, pr=None, issue=None, provenance_remote=None):
         self.graph = validate_graph(json.loads(graph_text))
+        if request is not None and not isinstance(request, str):
+            raise Failure("input", "The Run request must be text when supplied")
         self.id = uuid.uuid4().hex
         self.github_repository = None
         if pr is not None or issue is not None:

@@ -577,6 +577,25 @@ class RuntimeTests(unittest.TestCase):
         notes = [self.note(run, a["commit"]) for a in record["attempts"]]
         self.assertEqual(notes[1]["inputs"][0]["data"], {"v": 1})
 
+    def test_request_is_optional_operator_guidance(self):
+        for request in (None, "Also update the changelog"):
+            with self.subTest(request=request):
+                seen = []
+                def work(n, c, w):
+                    seen.append(c)
+                    return Result(message="done")
+                run = Runtime(graph({"a": node(), "b": node()}, ["a", "b"]), self.repo, self.base, request,
+                              adapters={"fake": Fake(work)})
+                record = run.run()
+                self.assertEqual(record["status"], "completed", record.get("failure"))
+                self.assertEqual(record["request"], request)
+                self.assertEqual([c["request"] for c in seen], [request, request])
+                self.assertEqual(seen[0]["inputs"], [{"node_id": None, "commit": self.base, "message": request, "data": None}])
+        run = Runtime(graph({"a": node()}, ["a"]), self.repo, self.base, adapters={"fake": Fake(lambda *a: Result())})
+        self.assertIsNone(run.run()["request"])
+        with self.assertRaises(Failure):
+            Runtime(graph({"a": node()}, ["a"]), self.repo, self.base, ["not", "text"])
+
     def test_nested_parallel_obeys_global_concurrency_bound(self):
         barrier = threading.Barrier(2)
         count, peak = 0, 0

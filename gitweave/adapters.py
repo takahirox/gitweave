@@ -120,7 +120,8 @@ GitWeave records them as this node's checkpoint commit.
 
 The execution inputs below use this contract: github_repository is the Run's GitHub repository (or null); \
 run_input identifies what the Run is about (for example an Issue or pull request number in that repository); \
-request is the operator's request; inputs[] are the upstream node outputs, each with its node_id, checkpoint \
+request is optional additional operator guidance (null when none was given; then rely on this \
+instruction and run_input); inputs[] are the upstream node outputs, each with its node_id, checkpoint \
 commit, human-readable message and structured data; item is the fan-out item, if any. Your final message, and data \
 when a result schema is requested, is your Result: the only non-file output passed downstream. Include in \
 it any state that later nodes need.
