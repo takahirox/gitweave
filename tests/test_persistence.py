@@ -196,11 +196,14 @@ class PersistenceTests(unittest.TestCase):
         record["publication_repositories"] = ["owner/artifact"]
         self.assertEqual(destination(storage, record), "https://github.com/owner/artifact.git")
         self.assertEqual(destination(storage, record, "origin"), "origin")
-        record["input_pr"] = {"repository": "other/repo"}
+        record["github_repository"] = "other/repo"
         with self.assertRaisesRegex(Failure, "Multiple artifact"):
             destination(storage, record)
         self.assertEqual(destination(storage, record, "git@example.test:repo.git"), "git@example.test:repo.git")
-        self.assertEqual(destination(storage, {"input_pr": record["input_pr"]}), "https://github.com/other/repo.git")
+        self.assertEqual(destination(storage, {"github_repository": "other/repo"}), "https://github.com/other/repo.git")
+        self.assertEqual(destination(storage, {"github_repository": "Owner/Artifact",
+                                               "publication_repositories": ["owner/artifact"]}),
+                         "https://github.com/Owner/Artifact.git")
 
     def test_actual_publication_destinations(self):
         def publish(repository):
