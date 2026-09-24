@@ -527,7 +527,7 @@ class RuntimeTests(unittest.TestCase):
     def test_loop_converges_and_empty_conditional_passes_through(self):
         calls = []
         def work(n, c, w):
-            calls.append(c)
+            calls.append(dict(c, head=git(w, "rev-parse", "HEAD")))
             return Result(data=len(calls) < 3)
         run = self.runtime({"a": node(schema={"type": "boolean"})},
                            [{"loop": {"flow": ["a"], "while": {"path": "/0/data", "equals": True}}},
@@ -536,7 +536,46 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(record["status"], "completed")
         self.assertEqual(len(calls), 3)
         self.assertFalse(record["outputs"][0]["data"])
-        self.assertEqual(calls[1]["workspace_base"], record["attempts"][0]["commit"])
+        self.assertEqual(calls[1]["head"], record["attempts"][0]["commit"])
+
+    def test_node_context_is_task_relevant_and_provenance_keeps_runtime_metadata(self):
+        seen = []
+        def work(n, c, w):
+            seen.append(c)
+            return Result(message=n["instruction"], data=[1] if n["instruction"] == "plan" else None)
+        run = self.runtime({"plan": node("plan", schema={"type": "array"}), "work": node("work")},
+                           ["plan", {"map": {"path": "/0/data", "flow": ["work"]}}], work)
+        record = run.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        for context in seen:
+            self.assertEqual(set(context), {"request", "github_repository", "run_input", "item", "inputs"})
+        self.assertEqual(seen[1]["item"], 1)
+        self.assertEqual(seen[1]["inputs"], [{"node_id": "plan", "commit": record["attempts"][0]["commit"],
+                                              "message": "plan", "data": [1]}])
+        note = self.note(run, record["attempts"][1]["commit"])
+        self.assertEqual((note["run_id"], note["instance_id"], note["fan_out_origin"]), (run.id, "work-2", {"index": 0, "parent": None}))
+        self.assertEqual(note["workspace_base"], record["attempts"][0]["commit"])
+        self.assertEqual(note["inputs"][0]["instance_id"], "plan-1")
+        self.assertTrue(note["inputs"][0]["data_validated"])
+
+    def test_node_context_mutation_does_not_leak(self):
+        seen = []
+        def work(n, c, w):
+            seen.append(json.loads(json.dumps(c)))
+            c["inputs"][0]["data"] = "mutated"
+            c["run_input"]["commit"] = "mutated"
+            if n["instruction"] == "flaky" and len(seen) == 2:
+                raise Failure("provider", "retry", retryable=True)
+            return Result(data={"v": 1})
+        run = self.runtime({"a": node(), "b": node("flaky")}, ["a", "b"], work, retries=1)
+        record = run.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        # The retry of b sees the same original context as its first attempt.
+        self.assertEqual(seen[1], seen[2])
+        self.assertEqual(seen[1]["inputs"][0]["data"], {"v": 1})
+        self.assertEqual(seen[2]["run_input"], {"kind": "commit", "commit": self.base})
+        notes = [self.note(run, a["commit"]) for a in record["attempts"]]
+        self.assertEqual(notes[1]["inputs"][0]["data"], {"v": 1})
 
     def test_nested_parallel_obeys_global_concurrency_bound(self):
         barrier = threading.Barrier(2)
