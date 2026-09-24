@@ -1,5 +1,9 @@
 # v0 validation evidence
 
+## Issue #84: max_steps counts node invocations
+
+On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 107 deterministic tests; all example graphs pass `gitweave validate`; `git diff --check` passed. Runtime tests verify that a loop of five node invocations completes with `max_steps: 5` despite repeated `if`/`loop` evaluation and records `steps: 5`, that a sixth invocation fails with `step_limit`, that retry attempts count once, and that the `map` pre-check compares item count with the remaining invocation budget. A loop iteration that invokes no node while its condition still matches (empty `if`, empty `map`, or `parallel` of empty branches) fails immediately with `loop` after only the setup node. Example `max_steps` values were recalibrated to node counts.
+
 ## Issue #83: default workspace_base
 
 On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 105 deterministic tests; all example graphs pass `gitweave validate`; `git diff --check` passed. Graph tests cover omission, explicit indices and `"run"`, and invalid values. A runtime test verifies that an omitted `workspace_base` starts a join's worktree from its first input's checkpoint (and records it as the attempt's `workspace_base`), while explicit `"run"` still selects the Run base. Examples and the runtime guide no longer repeat `"workspace_base": 0`.
