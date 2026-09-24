@@ -39,9 +39,9 @@ class GraphTests(unittest.TestCase):
                 self.assertEqual(raised.exception.kind, "graph")
                 self.assertIn("sandbox", str(raised.exception))
         graph = self.good()
-        graph["nodes"]["a"] = dict(kind="action", action="sync_pr", workspace_base=0,
+        graph["nodes"]["a"] = dict(kind="command", argv=["true"], workspace_base=0,
                                     sandbox="workspace-write")
-        with self.assertRaisesRegex(Failure, "sandbox is only supported"):
+        with self.assertRaisesRegex(Failure, "agent options are not supported on command nodes"):
             validate_graph(graph)
 
     def test_optional_claude_permission_mode(self):
@@ -68,14 +68,45 @@ class GraphTests(unittest.TestCase):
                 with self.subTest(provider=provider, value=value), self.assertRaisesRegex(Failure, "permission_mode") as raised:
                     validate_graph(graph)
                 self.assertEqual(raised.exception.kind, "graph")
-        for action in ("publish_pr", "sync_pr", "merge_pr", "comment_issue", "comment_pr"):
-            for value in (None, "auto"):
-                graph = self.good()
-                graph["nodes"]["a"] = dict(kind="action", action=action, workspace_base=0,
-                                          provider="claude", permission_mode=value)
-                with self.subTest(action=action, value=value), self.assertRaisesRegex(
-                        Failure, "permission_mode is only supported on Claude agent nodes"):
-                    validate_graph(graph)
+        for value in (None, "auto"):
+            graph = self.good()
+            graph["nodes"]["a"] = dict(kind="command", argv=["true"], workspace_base=0, permission_mode=value)
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    Failure, "agent options are not supported on command nodes"):
+                validate_graph(graph)
+
+    def test_command_nodes(self):
+        graph = self.good()
+        graph["nodes"]["a"] = dict(kind="command", argv=["./scripts/op", "--flag"], workspace_base=0,
+                                   config={"any": ["json"]}, schema={"type": "object"})
+        self.assertEqual(validate_graph(graph)["nodes"]["a"]["argv"], ["./scripts/op", "--flag"])
+        del graph["nodes"]["a"]["config"]
+        validate_graph(graph)
+        for bad in ({"argv": None}, {"argv": []}, {"argv": "true"}, {"argv": [""]}, {"argv": ["a", 1]},
+                    {"instruction": "x"}, {"provider": "codex"}, {"model": "m"}, {"effort": "high"},
+                    {"action": "sync_pr"}):
+            with self.subTest(bad=bad), self.assertRaises(Failure):
+                validate_graph(dict(graph, nodes={"a": dict(graph["nodes"]["a"], **bad)}))
+        for field in ("argv", "config"):
+            agent = self.good()
+            agent["nodes"]["a"][field] = ["true"]
+            with self.subTest(field=field), self.assertRaisesRegex(Failure, "only supported on command nodes"):
+                validate_graph(agent)
+        for kind in ("action", "system"):
+            with self.subTest(kind=kind), self.assertRaisesRegex(Failure, "unknown kind"):
+                validate_graph(dict(graph, nodes={"a": dict(graph["nodes"]["a"], kind=kind)}))
+
+    def test_node_retries_and_timeout_overrides(self):
+        for kind, extra in (("agent", {}), ("command", {"argv": ["true"]})):
+            graph = self.good()
+            graph["nodes"]["a"] = dict(kind=kind, workspace_base=0, retries=0, timeout=0.5, **extra)
+            if kind == "agent":
+                graph["nodes"]["a"].update(provider="codex", instruction="x")
+            validate_graph(graph)
+            for bad in ({"retries": -1}, {"retries": 1.0}, {"retries": True}, {"retries": None},
+                        {"timeout": 0}, {"timeout": None}, {"timeout": "1"}, {"timeout": float("inf")}):
+                with self.subTest(kind=kind, bad=bad), self.assertRaises(Failure):
+                    validate_graph(dict(graph, nodes={"a": dict(graph["nodes"]["a"], **bad)}))
 
     def test_timeout_omission_and_explicit_positive_values(self):
         validated = validate_graph(self.good())

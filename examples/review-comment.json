@@ -6,18 +6,21 @@
       "kind": "agent",
       "provider": "codex",
       "workspace_base": 0,
-      "instruction": "Review the supplied artifact against the request. Leave files unchanged. Return concrete findings in your human-readable message. Do not post to GitHub or perform publication, synchronization, approval, or merge."
+      "instruction": "Review the pull request identified by run_input in github_repository against the request. Leave files unchanged. Return concrete findings in your human-readable message. Do not post to GitHub."
     },
     "comment": {
-      "kind": "action",
-      "action": "comment_pr",
+      "kind": "command",
       "workspace_base": 0,
-      "config": {
-        "repository": "owner/repo",
-        "number": 9,
-        "body_path": "/0/message"
-      }
+      "retries": 0,
+      "argv": [
+        "python3",
+        "-c",
+        "import json, subprocess, sys\ncontext = json.load(sys.stdin)\nbody = context[\"inputs\"][0][\"message\"]\nurl = subprocess.run([\"gh\", \"pr\", \"comment\", str(context[\"run_input\"][\"number\"]), \"--repo\", context[\"github_repository\"], \"--body-file\", \"-\"],\n                     input=body, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()\nprint(json.dumps({\"message\": \"Posted review comment\", \"data\": {\"url\": url}}))\n"
+      ]
     }
   },
-  "flow": ["review", "comment"]
+  "flow": [
+    "review",
+    "comment"
+  ]
 }
