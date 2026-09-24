@@ -43,7 +43,7 @@ def validate_graph(graph):
         require(isinstance(node, dict), f"{name}: node must be an object")
         require(set(node) <= {"kind", "provider", "model", "effort", "sandbox", "permission_mode", "instruction", "schema", "workspace_base", "argv", "config", "retries", "timeout"}, f"{name}: unknown node field")
         require(node.get("kind") in ("agent", "command"), f"{name}: unknown kind")
-        base = node.get("workspace_base")
+        base = node.get("workspace_base", 0)
         require(base == "run" or (type(base) is int and base >= 0), f"{name}: workspace_base must be 'run' or an input index")
         if "retries" in node:
             require(type(node["retries"]) is int and node["retries"] >= 0, f"{name}: retries must be an integer >= 0")

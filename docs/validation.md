@@ -1,5 +1,9 @@
 # v0 validation evidence
 
+## Issue #83: default workspace_base
+
+On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 105 deterministic tests; all example graphs pass `gitweave validate`; `git diff --check` passed. Graph tests cover omission, explicit indices and `"run"`, and invalid values. A runtime test verifies that an omitted `workspace_base` starts a join's worktree from its first input's checkpoint (and records it as the attempt's `workspace_base`), while explicit `"run"` still selects the Run base. Examples and the runtime guide no longer repeat `"workspace_base": 0`.
+
 ## Issue #78: general Agent and Command Nodes
 
 On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 103 deterministic tests. All example graphs pass `gitweave validate`. `git diff --check` passed.

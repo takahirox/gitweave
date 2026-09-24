@@ -6,7 +6,6 @@
     "review": {
       "kind": "agent",
       "provider": "codex",
-      "workspace_base": 0,
       "instruction": "Review the selected artifact against the request and the base branch of the pull request identified by run_input in github_repository. Inspect the full diff and run relevant deterministic tests. Leave files unchanged. Set approved=true only when no concrete findings remain; otherwise return actionable findings. Do not push, merge, or post comments.",
       "schema": {
         "type": "object",
@@ -33,20 +32,17 @@
     "fix": {
       "kind": "agent",
       "provider": "codex",
-      "workspace_base": 0,
       "instruction": "Fix the concrete findings in inputs[0].data.findings in the assigned worktree. Run relevant deterministic tests and summarize fixes. Leave final files for the runtime checkpoint. Do not push, merge, or post comments."
     },
     "push": {
       "kind": "agent",
       "provider": "codex",
-      "workspace_base": 0,
       "retries": 0,
       "instruction": "Commit any uncommitted changes in the worktree, then update the head branch of the pull request identified by run_input in github_repository with this worktree's HEAD, following repository conventions. Do not force-overwrite changes made by others. Do not merge or post comments. Report the resulting PR head SHA."
     },
     "merge": {
       "kind": "agent",
       "provider": "codex",
-      "workspace_base": 0,
       "retries": 0,
       "instruction": "Merge the pull request identified by run_input in github_repository, following repository conventions and GitHub policy. Do not bypass required checks or reviews. Report whether it merged and the merge commit.",
       "schema": {

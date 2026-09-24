@@ -75,6 +75,18 @@ class GraphTests(unittest.TestCase):
                     Failure, "agent options are not supported on command nodes"):
                 validate_graph(graph)
 
+    def test_workspace_base_is_optional(self):
+        graph = self.good()
+        del graph["nodes"]["a"]["workspace_base"]
+        self.assertNotIn("workspace_base", validate_graph(graph)["nodes"]["a"])
+        for value in (0, 3, "run"):
+            graph["nodes"]["a"]["workspace_base"] = value
+            validate_graph(graph)
+        for value in (None, -1, True, 1.0, "0", "Run", []):
+            graph["nodes"]["a"]["workspace_base"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(Failure, "workspace_base must be"):
+                validate_graph(graph)
+
     def test_command_nodes(self):
         graph = self.good()
         graph["nodes"]["a"] = dict(kind="command", argv=["./scripts/op", "--flag"], workspace_base=0,

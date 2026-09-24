@@ -142,7 +142,7 @@ class Runtime:
             self.instances += 1
             instance = f"{name}-{self.instances}"
             node = self.graph["nodes"][name]
-            choice = node["workspace_base"]
+            choice = node.get("workspace_base", 0)
             if choice != "run" and choice >= len(inputs):
                 raise Failure("graph", f"{name}: workspace_base index outside inputs")
             base = self.base if choice == "run" else inputs[choice]["commit"]

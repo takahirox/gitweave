@@ -6,13 +6,11 @@
     "implement": {
       "kind": "agent",
       "provider": "claude",
-      "workspace_base": 0,
       "instruction": "Read the GitHub Issue identified by run_input in github_repository using available tools, then implement it completely in the assigned worktree. Run relevant tests. Do not push, open pull requests, or comment."
     },
     "publish": {
       "kind": "agent",
       "provider": "claude",
-      "workspace_base": 0,
       "retries": 0,
       "instruction": "Create the pull request for the Issue identified by run_input in github_repository, or update it if inputs[0].data.pr already identifies one, so that its head contains this worktree's changes. Follow the repository's conventions and pull request template for the branch, title and body, and link the Issue. Do not merge. Return the PR identity.",
       "schema": {
@@ -50,7 +48,6 @@
     "review": {
       "kind": "agent",
       "provider": "codex",
-      "workspace_base": 0,
       "instruction": "Review the pull request in inputs[0].data.pr against the Issue identified by run_input: check both missing scope and unnecessary scope, correctness, and tests. Leave files unchanged; do not push or merge. Forward pr unchanged.",
       "schema": {
         "type": "object",
@@ -100,7 +97,6 @@
     "fix": {
       "kind": "agent",
       "provider": "claude",
-      "workspace_base": 0,
       "instruction": "Fix the findings in inputs[0].data.findings in the assigned worktree and run relevant tests. Do not push or merge. Forward inputs[0].data.pr unchanged and summarize the fixes.",
       "schema": {
         "type": "object",
@@ -141,7 +137,6 @@
     "merge": {
       "kind": "agent",
       "provider": "codex",
-      "workspace_base": 0,
       "retries": 0,
       "instruction": "Merge the pull request in inputs[0].data.pr only if its head is still inputs[0].data.pr.head_sha, following repository conventions and GitHub policy. Do not bypass required checks or reviews. Forward pr.",
       "schema": {
@@ -187,7 +182,6 @@
     "close_issue": {
       "kind": "agent",
       "provider": "codex",
-      "workspace_base": 0,
       "retries": 0,
       "instruction": "If inputs[0].data.merged is true, make sure the Issue identified by run_input in github_repository is closed, referencing the merged pull request in inputs[0].data.pr. Otherwise leave it open. Report whether it is closed.",
       "schema": {

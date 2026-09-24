@@ -5,25 +5,25 @@
   "retries": 1,
   "nodes": {
     "plan": {
-      "kind": "agent", "provider": "codex", "workspace_base": 0,
+      "kind": "agent", "provider": "codex",
       "instruction": "Plan the request as a short list of independent tasks. Return tasks in structured data; do not edit files.",
       "schema": {"type": "object", "properties": {"tasks": {"type": "array", "items": {"type": "string"}}}, "required": ["tasks"], "additionalProperties": false}
     },
     "work": {
-      "kind": "agent", "provider": "claude", "workspace_base": 0,
+      "kind": "agent", "provider": "claude",
       "instruction": "Implement the task in item. Preserve unrelated files. Summarize your changes."
     },
     "integrate": {
-      "kind": "agent", "provider": "codex", "workspace_base": 0,
+      "kind": "agent", "provider": "codex",
       "instruction": "Integrate all supplied input commits into this worktree. Inspect diffs, merge or cherry-pick as needed, resolve conflicts and test. An empty task list requires no changes."
     },
     "review": {
-      "kind": "agent", "provider": "claude", "workspace_base": 0,
+      "kind": "agent", "provider": "claude",
       "instruction": "Review the artifact against the request, run checks, and report specific problems. Set approved=true only if no problems remain.",
       "schema": {"type": "object", "properties": {"approved": {"type": "boolean"}, "findings": {"type": "array", "items": {"type": "string"}}}, "required": ["approved", "findings"], "additionalProperties": false}
     },
     "fix": {
-      "kind": "agent", "provider": "codex", "workspace_base": 0,
+      "kind": "agent", "provider": "codex",
       "instruction": "Fix the review findings supplied in inputs. If approved, leave files unchanged. Run relevant checks."
     }
   },
