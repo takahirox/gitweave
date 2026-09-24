@@ -5,11 +5,12 @@ from .model import Failure
 def destination(git, record, remote=None):
     if remote is not None:
         return remote
-    repositories = set(record.get("publication_repositories", []))
-    if record.get("github_repository"):
-        repositories.add(record["github_repository"])
-    # GitHub repository names are case-insensitive.
-    repositories = set({repository.lower(): repository for repository in repositories}.values())
+    # GitHub repository names are case-insensitive; the Run repository's spelling wins.
+    repositories = {}
+    for repository in [record.get("github_repository"), *sorted(record.get("publication_repositories", []))]:
+        if repository:
+            repositories.setdefault(repository.lower(), repository)
+    repositories = set(repositories.values())
     if len(repositories) > 1:
         raise Failure("persistence", "Multiple artifact repositories require --provenance-remote selection")
     if repositories:
