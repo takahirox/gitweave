@@ -1,5 +1,9 @@
 # v0 validation evidence
 
+## Issue #82: smaller node execution context
+
+On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 108 deterministic tests; `git diff --check` passed. Runtime and Command tests verify that Agent and Command Nodes receive only `request`, `github_repository`, `run_input`, `item` and `inputs[]` entries of `node_id`/`commit`/`message`/`data` (Commands also `config`), while attempt notes still record Run ID, instance ID, fan-out origin, the resolved workspace base, and full inputs including instance IDs and validation flags. Control flow still uses the internal validation flag. Adapter tests check the updated preamble.
+
 ## Issue #84: max_steps counts node invocations
 
 On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 107 deterministic tests; all example graphs pass `gitweave validate`; `git diff --check` passed. Runtime tests verify that a loop of five node invocations completes with `max_steps: 5` despite repeated `if`/`loop` evaluation and records `steps: 5`, that a sixth invocation fails with `step_limit`, that retry attempts count once, and that the `map` pre-check compares item count with the remaining invocation budget. A loop iteration that invokes no node while its condition still matches (empty `if`, empty `map`, or `parallel` of empty branches) fails immediately with `loop` after only the setup node. Example `max_steps` values were recalibrated to node counts.

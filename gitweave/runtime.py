@@ -74,10 +74,13 @@ class Runtime:
             raise Failure("step_limit", "Run exceeded max_steps")
         self.steps += 1
 
-    def context(self, inputs, item, origin, base):
-        return {"run_id": self.id, "request": self.record["request"], "inputs": inputs,
-                "item": item, "fan_out_origin": origin, "workspace_base": base,
-                "github_repository": self.github_repository, "run_input": copy.deepcopy(self.run_input)}
+    def context(self, inputs, item):
+        # Only task-relevant data; Run/instance identity, fan-out origin and the
+        # workspace base stay in provenance.
+        return copy.deepcopy({"request": self.record["request"], "github_repository": self.github_repository,
+                              "run_input": self.run_input, "item": item,
+                              "inputs": [{"node_id": i.get("node_id"), "commit": i["commit"],
+                                          "message": i["message"], "data": i["data"]} for i in inputs]})
 
     @staticmethod
     def control_value(inputs, path):
@@ -151,8 +154,7 @@ class Runtime:
             if choice != "run" and choice >= len(inputs):
                 raise Failure("graph", f"{name}: workspace_base index outside inputs")
             base = self.base if choice == "run" else inputs[choice]["commit"]
-            context = self.context(inputs, item, origin, base)
-            context["instance_id"] = instance
+            context = self.context(inputs, item)
             retries = node.get("retries", self.graph.get("retries", 0))
             for attempt in range(1, retries + 2):
                 if self.stopped:
@@ -186,7 +188,7 @@ class Runtime:
             if node["kind"] == "agent" and node["provider"] not in self.adapters:
                 raise Failure("graph", f"Provider is not registered: {node['provider']}")
             workspace = temp / "workspace"
-            self.git.add_worktree(workspace, context["workspace_base"])
+            self.git.add_worktree(workspace, record["workspace_base"])
             timeout = node.get("timeout", self.graph.get("timeout"))
             if node["kind"] == "agent":
                 result = self.adapters[node["provider"]].run(node, context, workspace, timeout)
@@ -200,12 +202,12 @@ class Runtime:
                     exc.retryable = node["kind"] == "command"
                     raise
             message = f"GitWeave {self.id} {record['instance_id']} attempt {record['attempt']}"
-            commit = self.git.checkpoint(workspace, context["workspace_base"], message)
+            commit = self.git.checkpoint(workspace, record["workspace_base"], message)
             record.update(status="completed", output_commit=commit)
         except Exception as exc:
             error = exc if isinstance(exc, Failure) else Failure("internal", str(exc))
             result = error.result or result
-            commit = self.git.empty(context["workspace_base"], f"GitWeave failed {self.id} {suffix}")
+            commit = self.git.empty(record["workspace_base"], f"GitWeave failed {self.id} {suffix}")
             record.update(status="failed", failure_commit=commit,
                           failure={"kind": error.kind, "message": str(error), "retryable": error.retryable})
         finally:
