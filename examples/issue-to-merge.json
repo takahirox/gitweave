@@ -138,7 +138,7 @@
       "kind": "agent",
       "provider": "codex",
       "retries": 0,
-      "instruction": "Merge the pull request in inputs[0].data.pr only if its head is still inputs[0].data.pr.head_sha, following repository conventions and GitHub policy. Do not bypass required checks or reviews. Forward pr.",
+      "instruction": "Merge the pull request in inputs[0].data.pr only if its head is still inputs[0].data.pr.head_sha, with a merge commit (not squash or rebase) so the GitWeave checkpoint commits and their notes stay in the branch history, following GitHub policy. Do not bypass required checks or reviews. Forward pr.",
       "schema": {
         "type": "object",
         "properties": {

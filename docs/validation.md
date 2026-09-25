@@ -1,5 +1,9 @@
 # v0 validation evidence
 
+## Issue #90: merge commits keep checkpoint provenance
+
+On 2026-09-25, a live `issue-to-merge.json` Run in a sandbox repository, with all nodes on Claude Opus 5.5, merged its PR with a merge commit. From a fresh clone, `git fetch --no-tags origin 'refs/notes/gitweave/*:refs/notes/gitweave/*'` followed by `git log --notes='refs/notes/gitweave/*' main` showed the note for every GitWeave checkpoint commit on `main`, including the same-tree publish and review checkpoints. The runtime guide now recommends merge commits and documents this audit procedure, and both example merge nodes ask for a merge commit. `python3 -m unittest discover -s tests -v` passed; all examples pass `gitweave validate`; `git diff --check` passed.
+
 ## Issue #85: optional Run request
 
 On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 111 deterministic tests; `git diff --check` passed. CLI tests run `--issue`, `--pr` and `--commit` Runs without a request and verify `Runtime` receives `None`; existing tests still pass a request through unchanged. Runtime tests verify that an omitted request is `null` in `run.json`, every node context, and the Run-base input message, and that a supplied request reaches nodes unchanged. The Agent preamble describes `request` as optional operator guidance.

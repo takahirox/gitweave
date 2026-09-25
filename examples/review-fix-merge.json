@@ -44,7 +44,7 @@
       "kind": "agent",
       "provider": "codex",
       "retries": 0,
-      "instruction": "Merge the pull request identified by run_input in github_repository, following repository conventions and GitHub policy. Do not bypass required checks or reviews. Report whether it merged and the merge commit.",
+      "instruction": "Merge the pull request identified by run_input in github_repository, with a merge commit (not squash or rebase) so the GitWeave checkpoint commits and their notes stay in the branch history, following GitHub policy. Do not bypass required checks or reviews. Report whether it merged and the merge commit.",
       "schema": {
         "type": "object",
         "properties": {
