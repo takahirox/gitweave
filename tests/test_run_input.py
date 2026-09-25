@@ -1,6 +1,7 @@
 """Run input contracts (--commit, --pr, --issue) with real Git fetches; no network or live agents."""
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -173,6 +174,34 @@ class RepositoryInputTests(unittest.TestCase):
             self.assertEqual(record["base_commit"], expected_base)
             self.assertEqual(git(store, "show", f"{record['outputs'][0]['commit']}:{'issue' if kind == 'issue' else 'pull_request'}.txt"), "done")
         self.assertNotEqual(results["issue"][0].id, results["pr"][0].id)
+
+    def test_store_creation_race_and_failure_branches(self):
+        store = self.root / ".gitweave" / "repos" / "owner" / "repo.git"
+        real_rename = os.rename
+        # Lost race: another Run renamed its store into place first.
+        def lose(src, dst):
+            real_rename(src, dst)
+            Git(dst, "winner")
+            raise OSError(66, "Directory not empty")
+        with patch("os.rename", side_effect=lose):
+            storage = Git(store, "loser", initialize=True)
+        self.assertEqual(storage.repo, store.resolve())
+        self.assertEqual(git(store, "config", "gc.auto"), "0")
+        self.assertEqual(git(store, "config", "maintenance.auto"), "false")
+        self.assertEqual(sorted(p.name for p in store.parent.iterdir()), ["repo.git"])
+        # A failed rename with no store in place raises and leaves no staging directory.
+        other = self.root / ".gitweave" / "repos" / "owner" / "other.git"
+        with patch("os.rename", side_effect=OSError(13, "Permission denied")), self.assertRaises(OSError):
+            Git(other, "run", initialize=True)
+        self.assertEqual(sorted(p.name for p in other.parent.iterdir()), ["repo.git"])
+
+    def test_invalid_existing_store_does_not_fall_through_to_a_checkout(self):
+        git(self.root, "init", "-q")  # the invoking directory is itself a checkout
+        store = self.root / ".gitweave" / "repos" / "owner" / "repo.git"
+        store.mkdir(parents=True)
+        with self.assertRaisesRegex(Failure, "Not a GitWeave store"):
+            Runtime(graph({"work": node()}, ["work"]), "owner/repo", None, issue=1)
+        self.assertEqual(git(self.root, "for-each-ref", "refs/gitweave"), "")
 
     def test_github_input_contract(self):
         text = graph({"work": node()}, ["work"])

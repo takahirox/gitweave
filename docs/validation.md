@@ -2,14 +2,14 @@
 
 ## Issue #96: shared per-repository store for PR/Issue Runs
 
-On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 113 deterministic tests; `git diff --check` passed. Real local Git tests (GitHub URLs redirected to a local repository; `gh` guarded) cover the following:
+On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 115 deterministic tests; `git diff --check` passed. Real local Git tests (GitHub URLs redirected to a local repository; `gh` guarded) cover the following:
 
 - An Issue Run and a later PR Run, the latter spelled `Owner/Repo`, share `.gitweave/repos/owner/repo.git`. No per-Run store is created.
 - Initializing the second Run fetches no objects already present: the object count is unchanged.
 - Each Run's `run.json`, refs and notes stay separate in the shared store, only each Run's own refs are pushed, and no worktrees are left behind.
 - Two Runs started concurrently against an absent store both complete with correct bases, while both hold worktrees in the store at the same time.
 
-The concurrent test first failed with `could not lock config file … File exists` from simultaneous `git init`. The store is now initialized in a staging directory and renamed into place. Bases are fetched directly into `refs/gitweave/<run-id>/input/base` instead of `FETCH_HEAD`, and worktrees use unique directory names.
+The concurrent test first failed with `could not lock config file … File exists` from simultaneous `git init`. The store is now initialized in a staging directory and renamed into place. Bases are fetched directly into `refs/gitweave/<run-id>/input/base` instead of `FETCH_HEAD`. Review found that forced concurrent auto-gc across 12 processes failed about 1 in 60 Runs, so the store disables automatic gc/maintenance. Review also found that an empty store directory inside a checkout fell through to that checkout, so the store is now verified. Deterministic tests force the lost-race and failed-rename branches and cover an invalid existing store.
 
 ## Issue #94: human-readable agent commits in examples
 
