@@ -1,8 +1,10 @@
 """Run input contracts (--commit, --pr, --issue) with real Git fetches; no network or live agents."""
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -52,7 +54,7 @@ class RepositoryInputTests(unittest.TestCase):
         git(self.remote, "checkout", "-q", "main")  # the remote default branch
         original = Git.command
         def command(instance, *args, **kwargs):
-            args = tuple(str(self.remote) if a == "https://github.com/owner/repo.git" else a for a in args)
+            args = tuple(str(self.remote) if str(a).lower() == "https://github.com/owner/repo.git" else a for a in args)
             return original(instance, *args, **kwargs)
         self.addCleanup(patch.stopall)
         patch.object(Git, "command", command).start()
@@ -109,6 +111,97 @@ class RepositoryInputTests(unittest.TestCase):
         self.assertEqual(git(run.git.repo, "rev-parse", f"refs/gitweave/{run.id}/input/base"), self.base)
         self.assertEqual(record["provenance_destination"], "https://github.com/owner/repo.git")
         self.assertEqual(json.loads(git(self.remote, "show", record["run_ref"] + ":run.json")), record)
+
+    def objects(self, store):
+        stats = dict(line.split(": ") for line in git(store, "count-objects", "-v").splitlines())
+        return int(stats["count"]) + int(stats["in-pack"])
+
+    def test_runs_share_one_store_per_repository(self):
+        first, first_record = self.run_github(lambda *a: Result(), issue=1)
+        store = self.root / ".gitweave" / "repos" / "owner" / "repo.git"
+        self.assertEqual(first.git.repo, store.resolve())
+        self.assertEqual(first_record["repository"], str(store.resolve()))
+        self.assertFalse((self.root / ".gitweave" / "runs").exists())
+        # GitHub names are case-insensitive: another spelling reuses the same store,
+        # and objects already fetched are not fetched again.
+        # The PR head is already in the store (the first Run's base).
+        git(self.remote, "update-ref", "refs/pull/10/head", self.base)
+        before = self.objects(store)
+        second = Runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), "Owner/Repo", None,
+                         adapters={"codex": Fake(lambda *a: Result())}, pr=10)
+        self.assertEqual(second.git.repo, store.resolve())
+        self.assertEqual(self.objects(store), before)
+        second_record = second.run()
+        self.assertEqual(second_record["status"], "completed", second_record.get("failure"))
+        self.assertEqual(second_record["github_repository"], "Owner/Repo")
+        # Per-Run provenance stays separate and inspectable in the shared store.
+        for run, record in ((first, first_record), (second, second_record)):
+            self.assertEqual(json.loads(git(store, "show", record["run_ref"] + ":run.json")), record)
+            refs = git(store, "for-each-ref", "--format=%(refname)", f"refs/gitweave/{run.id}/").splitlines()
+            self.assertIn(f"refs/gitweave/{run.id}/input/base", refs)
+            self.assertTrue(all(ref.startswith(f"refs/gitweave/{run.id}/") for ref in refs))
+            note = json.loads(git(store, "notes", f"--ref={run.git.notes}", "show", record["outputs"][0]["commit"]))
+            self.assertEqual(note["run_id"], run.id)
+        self.assertEqual(git(store, "rev-parse", f"refs/gitweave/{second.id}/input/base"), self.base)
+        # Each Run pushed only its own refs.
+        pushed = git(self.remote, "for-each-ref", "--format=%(refname)", "refs/gitweave", "refs/notes/gitweave").splitlines()
+        self.assertEqual({ref.split("/")[2] for ref in pushed if ref.startswith("refs/gitweave/")}, {first.id, second.id})
+        self.assertEqual(git(store, "worktree", "list").count("\n"), 0)
+
+    def test_concurrent_runs_share_the_store_safely(self):
+        barrier = threading.Barrier(2)
+        results = {}
+        def work(n, c, w):
+            barrier.wait(timeout=30)  # both Runs have worktrees in the same store at once
+            (w / f"{c['run_input']['kind']}.txt").write_text("done")
+            return Result()
+        def start(key, **source):
+            run = Runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), "owner/repo", None,
+                          adapters={"codex": Fake(work)}, **source)
+            results[key] = (run, run.run())
+        threads = [threading.Thread(target=start, args=("issue",), kwargs={"issue": 1}),
+                   threading.Thread(target=start, args=("pr",), kwargs={"pr": 10})]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=120)
+        self.assertEqual(set(results), {"issue", "pr"})
+        store = (self.root / ".gitweave" / "repos" / "owner" / "repo.git").resolve()
+        for kind, expected_base in (("issue", self.base), ("pr", self.head)):
+            run, record = results[kind]
+            self.assertEqual(record["status"], "completed", record.get("failure"))
+            self.assertEqual(run.git.repo, store)
+            self.assertEqual(record["base_commit"], expected_base)
+            self.assertEqual(git(store, "show", f"{record['outputs'][0]['commit']}:{'issue' if kind == 'issue' else 'pull_request'}.txt"), "done")
+        self.assertNotEqual(results["issue"][0].id, results["pr"][0].id)
+
+    def test_store_creation_race_and_failure_branches(self):
+        store = self.root / ".gitweave" / "repos" / "owner" / "repo.git"
+        real_rename = os.rename
+        # Lost race: another Run renamed its store into place first.
+        def lose(src, dst):
+            real_rename(src, dst)
+            Git(dst, "winner")
+            raise OSError(66, "Directory not empty")
+        with patch("os.rename", side_effect=lose):
+            storage = Git(store, "loser", initialize=True)
+        self.assertEqual(storage.repo, store.resolve())
+        self.assertEqual(git(store, "config", "gc.auto"), "0")
+        self.assertEqual(git(store, "config", "maintenance.auto"), "false")
+        self.assertEqual(sorted(p.name for p in store.parent.iterdir()), ["repo.git"])
+        # A failed rename with no store in place raises and leaves no staging directory.
+        other = self.root / ".gitweave" / "repos" / "owner" / "other.git"
+        with patch("os.rename", side_effect=OSError(13, "Permission denied")), self.assertRaises(OSError):
+            Git(other, "run", initialize=True)
+        self.assertEqual(sorted(p.name for p in other.parent.iterdir()), ["repo.git"])
+
+    def test_invalid_existing_store_does_not_fall_through_to_a_checkout(self):
+        git(self.root, "init", "-q")  # the invoking directory is itself a checkout
+        store = self.root / ".gitweave" / "repos" / "owner" / "repo.git"
+        store.mkdir(parents=True)
+        with self.assertRaisesRegex(Failure, "Not a GitWeave store"):
+            Runtime(graph({"work": node()}, ["work"]), "owner/repo", None, issue=1)
+        self.assertEqual(git(self.root, "for-each-ref", "refs/gitweave"), "")
 
     def test_github_input_contract(self):
         text = graph({"work": node()}, ["work"])

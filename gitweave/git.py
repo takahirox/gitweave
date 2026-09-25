@@ -1,7 +1,10 @@
 """Git storage. Run-specific notes avoid cross-run read/modify/write races."""
+import contextlib
+import fcntl
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -18,9 +21,28 @@ class Git:
         self.env.update(GIT_AUTHOR_NAME="GitWeave", GIT_AUTHOR_EMAIL="gitweave@localhost",
                         GIT_COMMITTER_NAME="GitWeave", GIT_COMMITTER_EMAIL="gitweave@localhost")
         if initialize:
-            self.repo.mkdir(parents=True, exist_ok=False)
-            self.command("init", "--bare")
-        self.command("rev-parse", "--git-common-dir")
+            if not self.repo.exists():
+                # Runs share one store and may create it concurrently: initialize it
+                # beside the target and rename it into place atomically; a Run that
+                # loses the race discards its copy and uses the winner's.
+                self.repo.parent.mkdir(parents=True, exist_ok=True)
+                staging = Path(tempfile.mkdtemp(prefix=f".{self.repo.name}-", dir=self.repo.parent))
+                try:
+                    self.command("init", "--bare", "--quiet", cwd=staging)
+                    # Automatic gc/maintenance could run while other Runs are writing.
+                    self.command("config", "gc.auto", "0", cwd=staging)
+                    self.command("config", "maintenance.auto", "false", cwd=staging)
+                    os.rename(staging, self.repo)
+                except OSError:
+                    if not self.repo.exists():
+                        raise
+                finally:
+                    shutil.rmtree(staging, ignore_errors=True)
+            # Never fall through to an enclosing checkout if the store is not a repository.
+            if Path(self.command("rev-parse", "--absolute-git-dir")).resolve() != self.repo:
+                raise Failure("git", f"Not a GitWeave store: {self.repo}")
+        common = Path(self.command("rev-parse", "--git-common-dir"))
+        self.common_dir = common if common.is_absolute() else self.repo / common
 
     def command(self, *args, cwd=None, input=None, env=None):
         try:
@@ -57,12 +79,20 @@ class Git:
             self.command("update-ref", f"refs/gitweave/{self.run_id}/run", commit)
             return commit
 
+    @contextlib.contextmanager
+    def worktree_lock(self):
+        # Worktree metadata is shared by every Run (and process) using this
+        # repository; Git does not serialize concurrent add/remove.
+        with self.lock, open(self.common_dir / "gitweave-worktrees.lock", "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
     def add_worktree(self, path, base):
-        with self.lock:
+        with self.worktree_lock():
             self.command("worktree", "add", "--detach", str(path), base)
 
     def remove_worktree(self, path):
-        with self.lock:
+        with self.worktree_lock():
             self.command("worktree", "remove", "--force", str(path))
 
     def checkpoint(self, path, base, message):
