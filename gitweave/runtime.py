@@ -193,7 +193,8 @@ class Runtime:
         try:
             if node["kind"] == "agent" and node["provider"] not in self.adapters:
                 raise Failure("graph", f"Provider is not registered: {node['provider']}")
-            workspace = temp / "workspace"
+            # Unique names keep worktree metadata distinct across Runs.
+            workspace = temp / temp.name
             self.git.add_worktree(workspace, record["workspace_base"])
             timeout = node.get("timeout", self.graph.get("timeout"))
             if node["kind"] == "agent":

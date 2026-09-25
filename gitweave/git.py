@@ -1,4 +1,6 @@
 """Git storage. Run-specific notes avoid cross-run read/modify/write races."""
+import contextlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -39,7 +41,8 @@ class Git:
             # Never fall through to an enclosing checkout if the store is not a repository.
             if Path(self.command("rev-parse", "--absolute-git-dir")).resolve() != self.repo:
                 raise Failure("git", f"Not a GitWeave store: {self.repo}")
-        self.command("rev-parse", "--git-common-dir")
+        common = Path(self.command("rev-parse", "--git-common-dir"))
+        self.common_dir = common if common.is_absolute() else self.repo / common
 
     def command(self, *args, cwd=None, input=None, env=None):
         try:
@@ -76,12 +79,20 @@ class Git:
             self.command("update-ref", f"refs/gitweave/{self.run_id}/run", commit)
             return commit
 
+    @contextlib.contextmanager
+    def worktree_lock(self):
+        # Worktree metadata is shared by every Run (and process) using this
+        # repository; Git does not serialize concurrent add/remove.
+        with self.lock, open(self.common_dir / "gitweave-worktrees.lock", "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
     def add_worktree(self, path, base):
-        with self.lock:
+        with self.worktree_lock():
             self.command("worktree", "add", "--detach", str(path), base)
 
     def remove_worktree(self, path):
-        with self.lock:
+        with self.worktree_lock():
             self.command("worktree", "remove", "--force", str(path))
 
     def checkpoint(self, path, base, message):

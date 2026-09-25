@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -213,3 +214,38 @@ class GitRepositoryTests(unittest.TestCase):
             self.assertEqual(inherited_index.read_bytes(), index_before)
             self.assertEqual(git.env["GIT_INDEX_FILE"], str(inherited_index))
             self.assertEqual(dict(os.environ), parent)
+
+
+WORKTREE_CHURN = """
+import sys, tempfile
+from pathlib import Path
+from gitweave.git import Git
+store, base, label = sys.argv[1:4]
+git = Git(store, label, initialize=True)
+for _ in range(16):
+    with tempfile.TemporaryDirectory() as temp:
+        # The same basename in every process stresses Git's shared worktree metadata.
+        path = Path(temp) / "workspace"
+        git.add_worktree(path, base)
+        git.remove_worktree(path)
+"""
+
+
+class SharedStoreProcessTests(unittest.TestCase):
+    def test_worktree_add_and_remove_are_safe_across_processes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = Path(temp) / "repos" / "owner" / "repo.git"
+            seed = Path(temp) / "seed"
+            subprocess.run(["git", "init", "-q", str(seed)], check=True)
+            subprocess.run(["git", "-C", str(seed), "-c", "user.name=T", "-c", "user.email=t@localhost",
+                            "commit", "--allow-empty", "-qm", "base"], check=True)
+            base = subprocess.check_output(["git", "-C", str(seed), "rev-parse", "HEAD"], text=True).strip()
+            Git(store, "seed", initialize=True).command("fetch", "-q", str(seed), f"{base}:refs/seed")
+            env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parent.parent))
+            processes = [subprocess.Popen([sys.executable, "-c", WORKTREE_CHURN, str(store), base, f"p{i}"],
+                                          env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                         for i in range(8)]
+            failures = [p.communicate(timeout=120)[1] for p in processes if p.wait(timeout=120)]
+            self.assertEqual(failures, [])
+            listed = subprocess.check_output(["git", "-C", str(store), "worktree", "list"], text=True)
+            self.assertEqual(len(listed.splitlines()), 1)
