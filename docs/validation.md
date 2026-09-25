@@ -1,5 +1,16 @@
 # v0 validation evidence
 
+## Issue #96: shared per-repository store for PR/Issue Runs
+
+On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 113 deterministic tests; `git diff --check` passed. Real local Git tests (GitHub URLs redirected to a local repository; `gh` guarded) cover the following:
+
+- An Issue Run and a later PR Run, the latter spelled `Owner/Repo`, share `.gitweave/repos/owner/repo.git`. No per-Run store is created.
+- Initializing the second Run fetches no objects already present: the object count is unchanged.
+- Each Run's `run.json`, refs and notes stay separate in the shared store, only each Run's own refs are pushed, and no worktrees are left behind.
+- Two Runs started concurrently against an absent store both complete with correct bases, while both hold worktrees in the store at the same time.
+
+The concurrent test first failed with `could not lock config file … File exists` from simultaneous `git init`. The store is now initialized in a staging directory and renamed into place. Bases are fetched directly into `refs/gitweave/<run-id>/input/base` instead of `FETCH_HEAD`, and worktrees use unique directory names.
+
 ## Issue #94: human-readable agent commits in examples
 
 On 2026-09-25, a live Run in a sandbox repository (all nodes on Claude Opus 5.5, `effort: high`) used the new `implement`/`fix` instructions. Issue #5 led to PR #6, with one review rejection and one fix, and was merged with a merge commit. The merged history had agent commits with proper subjects and bodies (`Add power function to calc (#5)` and `Raise ValueError for zero base with negative exponent in power`), each directly followed by a same-tree `GitWeave RUN_ID … attempt 1` checkpoint that carries the note, plus the same-tree publish/review checkpoints. The Run exposed that `fix` lacked an Issue reference, so both example instructions now ask for one. `python3 -m unittest discover -s tests -v` passed; all examples pass `gitweave validate`; `git diff --check` passed.

@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -17,9 +18,20 @@ class Git:
         self.env = dict(os.environ)
         self.env.update(GIT_AUTHOR_NAME="GitWeave", GIT_AUTHOR_EMAIL="gitweave@localhost",
                         GIT_COMMITTER_NAME="GitWeave", GIT_COMMITTER_EMAIL="gitweave@localhost")
-        if initialize:
-            self.repo.mkdir(parents=True, exist_ok=False)
-            self.command("init", "--bare")
+        if initialize and not self.repo.exists():
+            # Runs share one store and may create it concurrently: initialize it
+            # beside the target and rename it into place atomically; a Run that
+            # loses the race discards its copy and uses the winner's.
+            self.repo.parent.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(prefix=f".{self.repo.name}-", dir=self.repo.parent))
+            try:
+                self.command("init", "--bare", "--quiet", cwd=staging)
+                os.rename(staging, self.repo)
+            except OSError:
+                if not self.repo.exists():
+                    raise
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
         self.command("rev-parse", "--git-common-dir")
 
     def command(self, *args, cwd=None, input=None, env=None):

@@ -36,7 +36,10 @@ class Runtime:
                 raise Failure(source, "--pr and --issue require a GitHub owner/repo identity, not a checkout path")
             self.github_repository = str(repo)
             self.run_input = {"kind": "pull_request" if pr is not None else "issue", "number": number}
-            storage = Path.cwd() / ".gitweave" / "runs" / self.id / "repository.git"
+            # One store per GitHub repository (names are case-insensitive), shared by
+            # Runs; all per-Run state lives under refs/gitweave/<run-id>/ and its notes ref.
+            owner, name = self.github_repository.lower().split("/")
+            storage = Path.cwd() / ".gitweave" / "repos" / owner / f"{name}.git"
             self.git = Git(storage, self.id, initialize=True)
         else:
             if commit is None:
@@ -45,10 +48,12 @@ class Runtime:
         if self.github_repository:
             # Run inputs are identities; nodes read Issue/PR content themselves.
             # The base is the PR head or the default branch HEAD, frozen at Run start.
+            # Fetch straight into this Run's ref, not FETCH_HEAD, which concurrent Runs share.
             source = f"refs/pull/{pr}/head" if pr is not None else "HEAD"
-            self.git.command("fetch", "--no-tags", f"https://github.com/{self.github_repository}.git", source)
-            self.base = self.git.resolve("FETCH_HEAD")
-            self.git.command("update-ref", f"refs/gitweave/{self.id}/input/base", self.base)
+            target = f"refs/gitweave/{self.id}/input/base"
+            self.git.command("fetch", "--no-tags", "--no-write-fetch-head",
+                             f"https://github.com/{self.github_repository}.git", f"{source}:{target}")
+            self.base = self.git.resolve(target)
         else:
             self.base = self.git.resolve(commit)
             self.run_input = {"kind": "commit", "commit": self.base}
@@ -188,7 +193,8 @@ class Runtime:
         try:
             if node["kind"] == "agent" and node["provider"] not in self.adapters:
                 raise Failure("graph", f"Provider is not registered: {node['provider']}")
-            workspace = temp / "workspace"
+            # A unique name keeps worktree metadata distinct across concurrent Runs.
+            workspace = temp / temp.name
             self.git.add_worktree(workspace, record["workspace_base"])
             timeout = node.get("timeout", self.graph.get("timeout"))
             if node["kind"] == "agent":
