@@ -245,6 +245,37 @@ Ordinary clone does not fetch these namespaces. Discover Run IDs with
 the notes refspec. Existing historical refs, including older archive markers,
 remain inspectable and transferable through Git; no migration is needed.
 
+### Merging checkpoint commits and auditing branch history
+
+When a Graph publishes a node's artifact as a pull request, the PR's commits are
+GitWeave checkpoint commits, including the same-tree checkpoints of nodes that
+changed no files (for example publish and review steps). This is intentional:
+once merged, every step remains reachable from the target branch, and each
+commit's Git note records that step's inputs, instruction, result, logs,
+model/provider, usage and timing for later auditing and analysis.
+
+**Merge such pull requests with a merge commit.** A merge commit keeps the
+original checkpoint commits, and therefore the SHAs their notes are attached to,
+in the branch history. Squash and rebase merges rewrite those commits: the
+branch then contains new SHAs with no notes, and the link to the execution
+record is silently lost (the notes and `refs/gitweave/*` still exist, but no
+branch commit points to them). GitWeave does not enforce a merge method; the
+merge node or repository settings decide. The shipped examples instruct their
+merge nodes to use a merge commit.
+
+To audit a branch across Runs, fetch all GitWeave notes once and show them with
+the log. Each checkpoint commit's subject starts with `GitWeave RUN_ID`, which
+names the notes ref that holds its record:
+
+```sh
+git fetch --no-tags origin 'refs/notes/gitweave/*:refs/notes/gitweave/*'
+git log --notes='refs/notes/gitweave/*' main           # every commit with its record
+git notes --ref=refs/notes/gitweave/RUN_ID show COMMIT  # one commit's record
+```
+
+Fetch `'refs/gitweave/*:refs/gitweave/*'` as well to get each Run's `run.json`
+and failed-attempt refs.
+
 Push and fetch use normal Git semantics, with no manifest, atomic publication
 requirement, completeness validation or recovery protocol. A failed push may have
 transferred some refs; inspect and retry with native Git commands. Git determines
