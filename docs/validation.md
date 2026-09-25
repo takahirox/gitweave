@@ -1,5 +1,9 @@
 # v0 validation evidence
 
+## Issue #94: human-readable agent commits in examples
+
+On 2026-09-25, a live Run in a sandbox repository (all nodes on Claude Opus 5.5, `effort: high`) used the new `implement`/`fix` instructions. Issue #5 led to PR #6, with one review rejection and one fix, and was merged with a merge commit. The merged history had agent commits with proper subjects and bodies (`Add power function to calc (#5)` and `Raise ValueError for zero base with negative exponent in power`), each directly followed by a same-tree `GitWeave RUN_ID … attempt 1` checkpoint that carries the note, plus the same-tree publish/review checkpoints. The Run exposed that `fix` lacked an Issue reference, so both example instructions now ask for one. `python3 -m unittest discover -s tests -v` passed; all examples pass `gitweave validate`; `git diff --check` passed.
+
 ## Issue #92: per-Run notes refs documented
 
 On 2026-09-25, the Git records section of the runtime guide was updated to explain why notes are stored per Run (`gitweave/git.py`: one notes ref per Run avoids cross-Run read/modify/write races) and that default `git log`/`git notes` do not show them. It also explains how to select a Run's notes by the Run ID in the checkpoint subject (matching `gitweave/runtime.py`), or all Runs by glob. Documentation only; `git diff --check` passed.
