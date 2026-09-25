@@ -195,7 +195,7 @@ GitWeave RUN_ID implement-1 attempt 1    ← checkpoint (same tree as below)
 Add power function to calc (#5)          ← agent commit
 ```
 
-If an agent does not commit, its checkpoint still captures the changes; only the human-readable message is missing.
+If an agent does not commit, or leaves some changes uncommitted, its checkpoint still captures them (the checkpoint then differs from the agent's commit); only the human-readable message is missing for those changes. The review-fix-merge example's Fix node follows the same pattern, referencing the pull request instead of an Issue.
 
 ## Validation and live smoke
 
