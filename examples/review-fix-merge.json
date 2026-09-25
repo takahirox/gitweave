@@ -32,7 +32,7 @@
     "fix": {
       "kind": "agent",
       "provider": "codex",
-      "instruction": "Fix the concrete findings in inputs[0].data.findings in the assigned worktree. Run relevant deterministic tests and summarize fixes. Leave final files for the runtime checkpoint. Do not push, merge, or post comments."
+      "instruction": "Fix the concrete findings in inputs[0].data.findings in the assigned worktree. Run relevant deterministic tests. When done, commit your changes with a concise, human-readable commit message describing what was fixed and why, following the repository's commit message conventions and referencing the pull request. Summarize the fixes. Do not push, merge, or post comments."
     },
     "push": {
       "kind": "agent",

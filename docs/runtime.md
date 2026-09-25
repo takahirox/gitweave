@@ -184,6 +184,19 @@ Issue input → Implement → Publish PR → Review ─ approved? ─ yes → Me
 
 Each step is an Agent Node whose instruction states the goal (for example "create or update the PR following the repository's conventions and template") rather than exact CLI commands. Node-to-node state is explicit: Publish returns `{pr}`, Review returns `{pr, approved, findings}`, Fix returns `{pr, summary}`, and Merge returns `{pr, merged, merge_commit}`. Because sequential execution replaces the active inputs with the latest node output, each intervening node forwards the state later nodes need; schemas with field descriptions define these handoff contracts. There is no hidden PR/Issue state. Every invocation, including same-tree Publish/Review/Merge/Close checkpoints, keeps its own checkpoint commit and note for audit. The same flow can be collapsed into one strong Agent, or deterministic steps can become Command Nodes.
 
+Nodes that change files (Implement and Fix) commit their work in the worktree with a concise, human-readable message that references the Issue, before finishing. GitWeave then checkpoints the final worktree on top of that commit, so the merged history contains both: agent commits are the human-readable change history, and `GitWeave RUN_ID …` checkpoint commits mark node boundaries and carry the notes. A checkpoint's parent is the agent's final `HEAD`, so each agent commit is directly followed by the checkpoint that records its node:
+
+```text
+GitWeave RUN_ID fix-4 attempt 1          ← checkpoint (same tree as below; carries the note)
+Raise ValueError for … (#5)              ← agent commit
+GitWeave RUN_ID review-3 attempt 1       ← same-tree checkpoint
+GitWeave RUN_ID publish-2 attempt 1      ← same-tree checkpoint
+GitWeave RUN_ID implement-1 attempt 1    ← checkpoint (same tree as below)
+Add power function to calc (#5)          ← agent commit
+```
+
+If an agent does not commit, its checkpoint still captures the changes; only the human-readable message is missing.
+
 ## Validation and live smoke
 
 ```sh

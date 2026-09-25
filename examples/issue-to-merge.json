@@ -6,7 +6,7 @@
     "implement": {
       "kind": "agent",
       "provider": "claude",
-      "instruction": "Read the GitHub Issue identified by run_input in github_repository using available tools, then implement it completely in the assigned worktree. Run relevant tests. Do not push, open pull requests, or comment."
+      "instruction": "Read the GitHub Issue identified by run_input in github_repository using available tools, then implement it completely in the assigned worktree. Run relevant tests. When done, commit your changes in the worktree with a concise, human-readable commit message describing what changed and why, following the repository's commit message conventions and referencing the Issue. Do not push, open pull requests, or comment."
     },
     "publish": {
       "kind": "agent",
@@ -97,7 +97,7 @@
     "fix": {
       "kind": "agent",
       "provider": "claude",
-      "instruction": "Fix the findings in inputs[0].data.findings in the assigned worktree and run relevant tests. Do not push or merge. Forward inputs[0].data.pr unchanged and summarize the fixes.",
+      "instruction": "Fix the findings in inputs[0].data.findings in the assigned worktree and run relevant tests. When done, commit your changes with a concise, human-readable commit message describing what was fixed and why, following the repository's commit message conventions and referencing the Issue. Do not push or merge. Forward inputs[0].data.pr unchanged and summarize the fixes.",
       "schema": {
         "type": "object",
         "properties": {
