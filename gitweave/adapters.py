@@ -156,7 +156,8 @@ def session(child, prompt, timeout, idle, grace):
                 idle_since = None
     child.wait()
     reader.join()
-    return child.returncode, "".join(output), "".join(errors)
+    # A kill after GitWeave closed the session is not a failure; the final turn decides.
+    return 0 if killed else child.returncode, "".join(output), "".join(errors)
 
 
 def normalize(provider, stdout, stderr="", returncode=0, structured=False):

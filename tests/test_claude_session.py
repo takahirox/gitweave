@@ -40,7 +40,7 @@ elif scenario == "midturn":  # the task finishes, then a long silent foreground 
     time.sleep(0.2)
     emit(type="system", subtype="background_tasks_changed", tasks=[])
     emit(type="assistant", message={"content": []})
-    time.sleep(1.0)
+    time.sleep(2.5)
     result("tested", 0.02, 5)
 elif scenario == "chatty":  # a monitor keeps waking the agent; the task never ends
     import os, threading
@@ -131,7 +131,7 @@ class ClaudeSessionTests(unittest.TestCase):
         self.assertEqual(result.native["killed_background_tasks"], ["srv"])
 
     def test_silent_turn_after_background_work_is_not_interrupted(self):
-        code, stdout, elapsed = self.run_session("midturn", idle=0.3)
+        code, stdout, elapsed = self.run_session("midturn", idle=1.0)
         self.assertEqual(self.messages(), ["the prompt"])  # no nudge mid-turn
         self.assertEqual(normalize("claude", stdout, structured=True).message, "tested")
 
@@ -153,8 +153,8 @@ class ClaudeSessionTests(unittest.TestCase):
         code, stdout, stderr = process([sys.executable, str(self.script), "noexit", str(self.log)],
                                        "the prompt", self.root, None, stream=True, idle=10, grace=0.3)
         self.assertLess(time.monotonic() - started, 10)
-        self.assertNotEqual(code, 0)
-        self.assertEqual(normalize("claude", stdout, structured=True).message, "done")
+        self.assertEqual(code, 0)  # the session was over; its final turn succeeded
+        self.assertEqual(normalize("claude", stdout, returncode=code, structured=True).message, "done")
 
     def test_final_turn_decides_the_outcome(self):
         error = {"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "transient",
