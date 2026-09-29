@@ -1,5 +1,21 @@
 # v0 validation evidence
 
+## Issue #98: Claude sessions wait for background tasks
+
+On 2026-09-29, `python3 -m unittest discover -s tests -v` passed all 125 deterministic tests; `git diff --check` passed. Experiments with Claude Code 2.1.281 (`claude-haiku-4-5`, scratch directory) showed the following:
+
+- With stdin closed after the prompt (the old invocation), a `run_in_background` task was `killed` about 5 s after the turn's `result`.
+- With `--input-format stream-json` and stdin kept open, the completion notification started a new turn without input. This held for Bash and Monitor.
+- `usage` is per turn, while `total_cost_usd` is cumulative.
+
+New real-process tests drive a fake Claude through these cases: no background work; a task that completes and triggers a second turn; a never-ending task that is nudged once and then closed (recording `killed_background_tasks`); and the node timeout bounding a waiting session. Review found three problems, now fixed and covered by tests:
+
+- A long silent foreground step after background work got a mid-turn nudge.
+- A never-ending task that keeps waking the agent held the session open forever.
+- A failed stdin write dropped Claude's remaining output.
+
+Further tests cover killing a Claude that does not exit after the session closes, and the final turn deciding success or failure. A live adapter run with real Claude and `sleep 20` in the background completed after two turns, with the final structured Result read from the task's output.
+
 ## Issue #96: shared per-repository store for PR/Issue Runs
 
 On 2026-09-25, `python3 -m unittest discover -s tests -v` passed all 116 deterministic tests; `git diff --check` passed. Real local Git tests (GitHub URLs redirected to a local repository; `gh` guarded) cover the following:

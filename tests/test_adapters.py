@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 from gitweave.adapters import PREAMBLE, CLIAdapter, normalize, process
 from gitweave.model import Failure
+from fake_claude import FakeChild
 
 
 class AdapterTests(unittest.TestCase):
@@ -236,20 +237,24 @@ class AdapterTests(unittest.TestCase):
             raw = (Path(__file__).parent / "fixtures" / f"{provider}.jsonl").read_text()
             with self.subTest(provider=provider, options=options), patch.dict(os.environ, parent, clear=True), \
                     patch("gitweave.adapters.subprocess.Popen") as popen:
-                popen.return_value.communicate.return_value = (raw, "")
-                popen.return_value.returncode = 0
+                if provider == "claude":
+                    popen.return_value = FakeChild(raw)
+                else:
+                    popen.return_value.communicate.return_value = (raw, "")
+                    popen.return_value.returncode = 0
                 CLIAdapter(provider).run(dict(instruction="work", **options), {}, Path("/fake/worktree"), 10)
                 command = popen.call_args.args[0]
                 if provider == "codex":
                     self.assertEqual(command, ["codex", "exec", "--json", "--sandbox", expected,
                                                "-C", "/fake/worktree", "-"])
+                    prompt = popen.return_value.communicate.call_args.args[0]
                 else:
                     self.assertEqual(command, ["claude", "-p", "--output-format", "stream-json",
-                                               "--verbose"])
+                                               "--verbose", "--input-format", "stream-json"])
+                    [prompt] = popen.return_value.messages()
                 self.assertEqual(popen.call_args.kwargs["cwd"], Path("/fake/worktree"))
                 self.assertNotIn("env", popen.call_args.kwargs)
                 self.assertEqual(dict(os.environ), parent)
-                prompt = popen.return_value.communicate.call_args.args[0]
                 self.assertIn("official artifact boundary", prompt)
 
     def test_adapter_rejects_unsupported_configuration_before_launch(self):
@@ -282,9 +287,11 @@ class AdapterTests(unittest.TestCase):
                 expected = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
                 if mode is not None:
                     expected += ["--permission-mode", mode]
-                expected += ["--effort", "high", "--json-schema", json.dumps(envelope), "--model", "chosen"]
+                expected += ["--effort", "high", "--json-schema", json.dumps(envelope), "--model", "chosen",
+                             "--input-format", "stream-json"]
                 self.assertEqual(invoke.call_args.args[0], expected)
                 self.assertEqual(invoke.call_args.args[2:], (Path("/fake/worktree"), 10))
+                self.assertEqual(invoke.call_args.kwargs, {"stream": True})
                 self.assertEqual(result.data, {"ok": True})
 
     def test_invalid_permission_modes_fail_before_launch(self):

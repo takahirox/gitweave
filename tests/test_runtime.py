@@ -9,6 +9,7 @@ from unittest.mock import Mock, call, patch
 from gitweave.adapters import CLIAdapter
 from gitweave.runtime import Runtime
 from gitweave.model import Failure, Result
+from fake_claude import FakeChild
 
 
 def git(repo, *args):
@@ -147,8 +148,9 @@ class RuntimeTests(unittest.TestCase):
                     agent["provider"] = provider
                     run = Runtime(graph({"a": agent}, ["a"], **options), self.repo,
                                   self.base, "request", adapters={provider: CLIAdapter(provider)})
-                    child = Mock(returncode=0)
-                    child.communicate.return_value = (raw, "")
+                    child = FakeChild(raw) if provider == "claude" else Mock(returncode=0)
+                    if provider == "codex":
+                        child.communicate.return_value = (raw, "")
                     launch = Mock(return_value=child)
                     with patch("gitweave.adapters.subprocess",
                                Mock(Popen=launch, PIPE=subprocess.PIPE,
@@ -158,8 +160,11 @@ class RuntimeTests(unittest.TestCase):
                     self.assertEqual(record["status"], "completed", record.get("failure"))
                     launch.assert_called_once()
                     self.assertIs(launch.call_args.kwargs["start_new_session"], "timeout" in options)
-                    child.communicate.assert_called_once()
-                    self.assertEqual(child.communicate.call_args.kwargs, {"timeout": options.get("timeout")})
+                    if provider == "codex":
+                        child.communicate.assert_called_once()
+                        self.assertEqual(child.communicate.call_args.kwargs, {"timeout": options.get("timeout")})
+                    else:
+                        self.assertTrue(child.closed_stdin)
                     kill.assert_not_called()
                     self.assertEqual("timeout" in run.graph, "timeout" in options)
 
