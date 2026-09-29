@@ -12,25 +12,31 @@ from .model import Failure, Result
 from .graph import validate_permission_mode, validate_sandbox
 
 
-# How long a Claude session may stay silent after ending a turn while background
-# tasks are pending, before GitWeave nudges the agent and then closes the session.
+# How long a Claude session may wait, with no turn running, on background tasks
+# before GitWeave nudges the agent and then closes the session.
 BACKGROUND_IDLE_SECONDS = 600
+# How long Claude may take to exit after GitWeave closes the session.
+CLOSE_GRACE_SECONDS = 60
 
-NUDGE = ("GitWeave: your turn ended while these background tasks are still running and no "
-         "progress arrived for {minutes:g} minutes: {tasks}. Stop any task you no longer need "
-         "(for example with TaskStop) and finish your work. If a task is still required, wait "
-         "for it to complete before ending your turn; otherwise the session will be closed and "
-         "remaining tasks stopped.")
+NUDGE = ("GitWeave: your turn ended while these background tasks are still running, and "
+         "{minutes:g} minutes passed without them finishing: {tasks}. Stop any task you no "
+         "longer need (for example with TaskStop) and finish your work. If a task is still "
+         "required, wait for it to complete before ending your turn; otherwise the session "
+         "will be closed and remaining tasks stopped.")
 
 
-def kill(child):
+def kill(child, group=True):
     try:
-        os.killpg(child.pid, signal.SIGKILL)
+        if group:
+            os.killpg(child.pid, signal.SIGKILL)
+        else:
+            child.kill()
     except ProcessLookupError:
         pass
 
 
-def process(command, prompt, cwd, timeout, *, stream=False, idle=BACKGROUND_IDLE_SECONDS):
+def process(command, prompt, cwd, timeout, *, stream=False, idle=BACKGROUND_IDLE_SECONDS,
+            grace=CLOSE_GRACE_SECONDS):
     try:
         child = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -38,7 +44,7 @@ def process(command, prompt, cwd, timeout, *, stream=False, idle=BACKGROUND_IDLE
     except OSError as exc:
         raise Failure("launch", str(exc), retryable=True) from exc
     if stream:
-        return session(child, prompt, timeout, idle)
+        return session(child, prompt, timeout, idle, grace)
     try:
         stdout, stderr = child.communicate(prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -49,14 +55,16 @@ def process(command, prompt, cwd, timeout, *, stream=False, idle=BACKGROUND_IDLE
     return child.returncode, stdout, stderr
 
 
-def session(child, prompt, timeout, idle):
+def session(child, prompt, timeout, idle, grace):
     """Drive a Claude stream-json session until no background task is pending.
 
     In one-shot `-p` mode Claude exits when the agent ends its turn, killing tasks it
     started in the background. With stdin open, a finished task is delivered to the
-    agent, which continues working. Stdin closes after a turn ends with nothing
-    pending; if tasks stay pending and silent, the agent is nudged once, then the
-    session is closed (Claude stops the remaining tasks).
+    agent, which continues in a new turn. Stdin closes when a turn ends with nothing
+    pending. Time spent between turns while tasks are pending is budgeted (`idle`):
+    when it runs out the agent is nudged once, and the next time the session is closed
+    (Claude stops the remaining tasks). The budget restarts whenever the pending set
+    empties, and a running turn never consumes it.
     """
     lines, errors = queue.Queue(), []
 
@@ -68,68 +76,84 @@ def session(child, prompt, timeout, idle):
     threading.Thread(target=read_stdout, daemon=True).start()
     reader = threading.Thread(target=lambda: errors.append(child.stderr.read()), daemon=True)
     reader.start()
-
-    def send(text):
-        child.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n")
-        child.stdin.flush()
+    output, pending = [], []
+    turn_running, spent, idle_since, nudged, closed_at, killed = True, 0.0, None, False, None, False
+    deadline = None if timeout is None else time.monotonic() + timeout
 
     def close():
-        if not child.stdin.closed:
-            child.stdin.close()
+        nonlocal closed_at, idle_since
+        idle_since = None
+        if closed_at is None:
+            closed_at = time.monotonic()
+            try:
+                child.stdin.close()
+            except OSError:
+                pass
 
-    output, pending, waiting, nudged = [], [], False, False
-    deadline = None if timeout is None else time.monotonic() + timeout
-    last = time.monotonic()
-    try:
-        send(prompt)
-        while True:
-            wait = None
-            if deadline is not None:
-                wait = deadline - time.monotonic()
-            if waiting:
-                quiet = last + idle - time.monotonic()
-                wait = quiet if wait is None else min(wait, quiet)
-            try:
-                line = lines.get(timeout=None if wait is None else max(wait, 0))
-            except queue.Empty:
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise subprocess.TimeoutExpired(child.args, timeout)
-                if nudged:
-                    waiting = False
-                    close()
-                else:
-                    nudged = True
-                    send(NUDGE.format(minutes=idle / 60, tasks=", ".join(
-                        f"{task.get('task_id')} ({task.get('description', '')})" for task in pending)))
-                last = time.monotonic()
-                continue
-            if line is None:
-                break
-            output.append(line)
-            last = time.monotonic()
-            try:
-                event = json.loads(line)
-            except ValueError:
-                continue
-            if event.get("type") == "system" and event.get("subtype") == "background_tasks_changed":
-                pending = event.get("tasks") or []
-            elif event.get("type") == "result":
-                waiting = bool(pending) and not child.stdin.closed
-                if not waiting:
-                    close()
-    except subprocess.TimeoutExpired:
-        kill(child)
-        child.wait()
-        reader.join()
-        raise Failure("timeout", "Node exceeded timeout", retryable=True,
-                      result=Result(raw_stdout="".join(output), raw_stderr="".join(errors)))
-    except (BrokenPipeError, OSError):
-        pass
-    finally:
+    def send(text):
+        nonlocal turn_running
         try:
-            close()
+            child.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n")
+            child.stdin.flush()
+            turn_running = True
         except OSError:
-            pass
+            close()  # Claude stopped reading; keep draining what it still prints.
+
+    send(prompt)
+    while True:
+        # Check timers on every iteration: a chatty session never lets the queue time out.
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
+            kill(child)
+            child.wait()
+            reader.join()
+            raise Failure("timeout", "Node exceeded timeout", retryable=True,
+                          result=Result(raw_stdout="".join(output), raw_stderr="".join(errors)))
+        if closed_at is not None and not killed and now >= closed_at + grace:
+            kill(child, group=timeout is not None)
+            killed = True  # drain to EOF
+        if idle_since is not None and now - idle_since >= idle - spent:
+            spent, idle_since = 0.0, None
+            if pending and not nudged:
+                nudged = True
+                send(NUDGE.format(minutes=idle / 60, tasks=", ".join(
+                    f"{task.get('task_id')} ({task.get('description', '')})" for task in pending)))
+            else:
+                close()
+        timers = [t for t in (deadline,
+                              idle_since and idle_since + idle - spent,
+                              not killed and closed_at and closed_at + grace) if t]
+        try:
+            line = lines.get(timeout=max(min(timers) - now, 0) if timers else None)
+        except queue.Empty:
+            continue
+        now = time.monotonic()
+        if line is None:
+            break
+        output.append(line)
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        kind = event.get("type")
+        if kind == "system" and event.get("subtype") == "background_tasks_changed":
+            pending = event.get("tasks") or []
+            if not pending:
+                spent, nudged = 0.0, False
+                if idle_since is not None:
+                    idle_since = now
+        elif kind == "result":
+            turn_running = False
+            if pending and closed_at is None:
+                idle_since = now
+            else:
+                close()
+        elif kind not in ("system", "rate_limit_event") and not turn_running:
+            # A new turn started (e.g. for a task notification): pause the budget.
+            turn_running = True
+            if idle_since is not None:
+                spent += now - idle_since
+                idle_since = None
     child.wait()
     reader.join()
     return child.returncode, "".join(output), "".join(errors)
@@ -179,9 +203,10 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                     result.session_id = event.get("session_id", result.session_id)
                 if event.get("type") == "result":
                     completed = True
-                    failed = failed or event.get("is_error", False) or event.get("subtype") != "success"
+                    # With several turns (see session()), the final turn decides the outcome.
+                    turn_failed = event.get("is_error", False) or event.get("subtype") != "success"
                     result.message = event.get("result", "")
-                    if event.get("is_error", False) or event.get("subtype") != "success":
+                    if turn_failed:
                         failure_event = event
                         diagnostics.append(result.message)
                         errors = event.get("errors", [])
@@ -202,6 +227,7 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                 elif (event.get("type") == "system" and event.get("subtype") == "task_updated"
                       and (event.get("patch") or {}).get("status") == "killed"):
                     result.native.setdefault("killed_background_tasks", []).append(event.get("task_id"))
+            failed = failed or (completed and turn_failed)
             if structured and not failed and completed:
                 # Only the session's final turn carries the node's Result.
                 if "structured_output" not in final:
