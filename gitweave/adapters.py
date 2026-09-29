@@ -2,31 +2,137 @@
 import json
 import os
 from pathlib import Path
+import queue
 import signal
 import subprocess
 import tempfile
+import threading
+import time
 from .model import Failure, Result
 from .graph import validate_permission_mode, validate_sandbox
 
 
-def process(command, prompt, cwd, timeout):
+# How long a Claude session may stay silent after ending a turn while background
+# tasks are pending, before GitWeave nudges the agent and then closes the session.
+BACKGROUND_IDLE_SECONDS = 600
+
+NUDGE = ("GitWeave: your turn ended while these background tasks are still running and no "
+         "progress arrived for {minutes:g} minutes: {tasks}. Stop any task you no longer need "
+         "(for example with TaskStop) and finish your work. If a task is still required, wait "
+         "for it to complete before ending your turn; otherwise the session will be closed and "
+         "remaining tasks stopped.")
+
+
+def kill(child):
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def process(command, prompt, cwd, timeout, *, stream=False, idle=BACKGROUND_IDLE_SECONDS):
     try:
         child = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                  start_new_session=timeout is not None)
     except OSError as exc:
         raise Failure("launch", str(exc), retryable=True) from exc
+    if stream:
+        return session(child, prompt, timeout, idle)
     try:
         stdout, stderr = child.communicate(prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        kill(child)
         stdout, stderr = child.communicate()
         raise Failure("timeout", "Node exceeded timeout", retryable=True,
                       result=Result(raw_stdout=stdout, raw_stderr=stderr))
     return child.returncode, stdout, stderr
+
+
+def session(child, prompt, timeout, idle):
+    """Drive a Claude stream-json session until no background task is pending.
+
+    In one-shot `-p` mode Claude exits when the agent ends its turn, killing tasks it
+    started in the background. With stdin open, a finished task is delivered to the
+    agent, which continues working. Stdin closes after a turn ends with nothing
+    pending; if tasks stay pending and silent, the agent is nudged once, then the
+    session is closed (Claude stops the remaining tasks).
+    """
+    lines, errors = queue.Queue(), []
+
+    def read_stdout():
+        for line in child.stdout:
+            lines.put(line)
+        lines.put(None)
+
+    threading.Thread(target=read_stdout, daemon=True).start()
+    reader = threading.Thread(target=lambda: errors.append(child.stderr.read()), daemon=True)
+    reader.start()
+
+    def send(text):
+        child.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n")
+        child.stdin.flush()
+
+    def close():
+        if not child.stdin.closed:
+            child.stdin.close()
+
+    output, pending, waiting, nudged = [], [], False, False
+    deadline = None if timeout is None else time.monotonic() + timeout
+    last = time.monotonic()
+    try:
+        send(prompt)
+        while True:
+            wait = None
+            if deadline is not None:
+                wait = deadline - time.monotonic()
+            if waiting:
+                quiet = last + idle - time.monotonic()
+                wait = quiet if wait is None else min(wait, quiet)
+            try:
+                line = lines.get(timeout=None if wait is None else max(wait, 0))
+            except queue.Empty:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(child.args, timeout)
+                if nudged:
+                    waiting = False
+                    close()
+                else:
+                    nudged = True
+                    send(NUDGE.format(minutes=idle / 60, tasks=", ".join(
+                        f"{task.get('task_id')} ({task.get('description', '')})" for task in pending)))
+                last = time.monotonic()
+                continue
+            if line is None:
+                break
+            output.append(line)
+            last = time.monotonic()
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("type") == "system" and event.get("subtype") == "background_tasks_changed":
+                pending = event.get("tasks") or []
+            elif event.get("type") == "result":
+                waiting = bool(pending) and not child.stdin.closed
+                if not waiting:
+                    close()
+    except subprocess.TimeoutExpired:
+        kill(child)
+        child.wait()
+        reader.join()
+        raise Failure("timeout", "Node exceeded timeout", retryable=True,
+                      result=Result(raw_stdout="".join(output), raw_stderr="".join(errors)))
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        try:
+            close()
+        except OSError:
+            pass
+    child.wait()
+    reader.join()
+    return child.returncode, "".join(output), "".join(errors)
 
 
 def normalize(provider, stdout, stderr="", returncode=0, structured=False):
@@ -83,17 +189,25 @@ def normalize(provider, stdout, stderr="", returncode=0, structured=False):
                             diagnostics.append("\n".join(error for error in errors
                                                          if isinstance(error, str) and error.strip()))
                     result.session_id = event.get("session_id", result.session_id)
+                    # A session may take several turns (see session()): token usage is
+                    # per turn and summed; total_cost_usd is already cumulative.
                     usage = event.get("usage", {})
-                    result.usage = {k: usage[k] for k in ("input_tokens", "output_tokens") if k in usage}
-                    if "cache_read_input_tokens" in usage:
-                        result.usage["cached_input_tokens"] = usage["cache_read_input_tokens"]
+                    for source, key in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
+                                        ("cache_read_input_tokens", "cached_input_tokens")):
+                        if source in usage:
+                            result.usage[key] = result.usage.get(key, 0) + usage[source]
                     if "total_cost_usd" in event:
                         result.usage["cost_usd"] = event["total_cost_usd"]
-                    if structured and not failed:
-                        if "structured_output" not in event:
-                            raise ValueError("Required structured result is missing")
-                        envelope = event["structured_output"]
-                        result.message, result.data = envelope["message"], envelope["data"]
+                    final = event
+                elif (event.get("type") == "system" and event.get("subtype") == "task_updated"
+                      and (event.get("patch") or {}).get("status") == "killed"):
+                    result.native.setdefault("killed_background_tasks", []).append(event.get("task_id"))
+            if structured and not failed and completed:
+                # Only the session's final turn carries the node's Result.
+                if "structured_output" not in final:
+                    raise ValueError("Required structured result is missing")
+                envelope = final["structured_output"]
+                result.message, result.data = envelope["message"], envelope["data"]
         if failed or not completed:
             candidates = [*reversed(diagnostics), stderr,
                           json.dumps(failure_event, ensure_ascii=False) if failure_event else "",
@@ -168,5 +282,9 @@ class CLIAdapter:
                 command += ["--model", node["model"]]
             if self.provider == "codex":
                 command += ["-"]
-            code, stdout, stderr = process(command, prompt, workspace, timeout)
+            else:
+                # Keep the session open until background tasks finish (see session()).
+                command += ["--input-format", "stream-json"]
+            code, stdout, stderr = process(command, prompt, workspace, timeout,
+                                           stream=self.provider == "claude")
             return normalize(self.provider, stdout, stderr, code, schema is not None)
