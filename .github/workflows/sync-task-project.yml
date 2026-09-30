@@ -1,0 +1,151 @@
+name: Sync task Project
+
+on:
+  issues:
+    types: [opened, reopened, closed, labeled, unlabeled]
+
+permissions: {}
+
+# Event ordering is not guaranteed. Every run reads current Issue state.
+concurrency:
+  group: sync-task-project-${{ github.repository }}-${{ github.event.issue.node_id }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event.issue.pull_request == null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reconcile Project membership and execution permission
+        env:
+          GH_TOKEN: ${{ secrets.ADD_TO_PROJECT_PAT }}
+          ISSUE_ID: ${{ github.event.issue.node_id }}
+        shell: bash
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo '::error::Configure the ADD_TO_PROJECT_PAT Actions repository secret with user-Project write access. See docs/project-automation.md. Automation is inactive until configured.'
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          def graphql(query, **variables):
+              result = subprocess.run(
+                  ['gh', 'api', 'graphql', '--input', '-'],
+                  input=json.dumps({'query': query, 'variables': variables}),
+                  text=True, capture_output=True, check=True,
+              )
+              response = json.loads(result.stdout)
+              if response.get('errors'):
+                  raise RuntimeError('GitHub GraphQL returned errors; check Project access and field configuration')
+              return response['data']
+
+          def pages(query, path, **variables):
+              cursor = None
+              while True:
+                  data = graphql(query, cursor=cursor, **variables)
+                  for key in path:
+                      data = data[key]
+                  yield from data['nodes']
+                  if not data['pageInfo']['hasNextPage']:
+                      break
+                  cursor = data['pageInfo']['endCursor']
+
+          issue_id = os.environ['ISSUE_ID']
+          project_id = graphql('''query {
+            user(login: "takahirox") { projectV2(number: 4) { id } }
+          }''')['user']['projectV2']['id']
+          fields = list(pages('''query($project: ID!, $cursor: String) {
+            node(id: $project) { ... on ProjectV2 {
+              fields(first: 100, after: $cursor) {
+                nodes { ... on ProjectV2SingleSelectField { id name options { id name } } }
+                pageInfo { hasNextPage endCursor }
+              }
+            } }
+          }''', ['node', 'fields'], project=project_id))
+
+          def field_option(name, option):
+              field = next((f for f in fields if f.get('name') == name), None)
+              value = next((o for o in field['options'] if o['name'] == option), None) if field else None
+              if not value:
+                  raise RuntimeError(f'Project #4 needs single-select {name} with option {option}')
+              return field['id'], value['id']
+
+          status_field, todo = field_option('Status', 'Todo')
+          permission_field, ready = field_option('AI execution', 'Ready')
+          _, not_ready = field_option('AI execution', 'Not ready')
+
+          def eligible():
+              # Read labels on all pages; query state after pagination as well.
+              labels = {label['name'] for label in pages('''query($issue: ID!, $cursor: String) {
+                node(id: $issue) { ... on Issue {
+                  labels(first: 100, after: $cursor) {
+                    nodes { name } pageInfo { hasNextPage endCursor }
+                  }
+                } }
+              }''', ['node', 'labels'], issue=issue_id)}
+              issue = graphql('''query($issue: ID!) {
+                node(id: $issue) { __typename ... on Issue { state } }
+              }''', issue=issue_id)['node']
+              return issue['__typename'] == 'Issue' and issue['state'] == 'OPEN' and 'task' in labels and 'draft' not in labels
+
+          def find_item():
+              return next((item for item in pages('''query($issue: ID!, $cursor: String) {
+                node(id: $issue) { ... on Issue {
+                  projectItems(first: 100, after: $cursor, includeArchived: true) {
+                    nodes { id project { id } } pageInfo { hasNextPage endCursor }
+                  }
+                } }
+              }''', ['node', 'projectItems'], issue=issue_id)
+                  if item['project']['id'] == project_id), None)
+
+          def status(item_id):
+              # Direct named lookup is independent of fieldValues pagination.
+              return graphql('''query($item: ID!) {
+                node(id: $item) { ... on ProjectV2Item {
+                  fieldValueByName(name: "Status") {
+                    ... on ProjectV2ItemFieldSingleSelectValue { optionId }
+                  }
+                } }
+              }''', item=item_id)['node']['fieldValueByName']
+
+          def set_field(item_id, field_id, option_id):
+              graphql('''mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $project, itemId: $item, fieldId: $field,
+                  value: {singleSelectOptionId: $option}
+                }) { projectV2Item { id } }
+              }''', project=project_id, item=item_id, field=field_id, option=option_id)
+
+          item = find_item()
+          # Recheck after writes to repair eligibility changes during API calls.
+          # Bounded retries fail visibly under sustained changes; queued events also reconcile.
+          for attempt in range(5):
+              allowed = eligible()
+              if allowed and item is None:
+                  # GitHub returns the existing item if another actor added it meanwhile.
+                  item = graphql('''mutation($project: ID!, $issue: ID!) {
+                    addProjectV2ItemById(input: {projectId: $project, contentId: $issue}) {
+                      item { id }
+                    }
+                  }''', project=project_id, issue=issue_id)['addProjectV2ItemById']['item']
+                  continue
+              if item is not None:
+                  if eligible() != allowed:
+                      continue
+                  # Read Status immediately before initialization, after eligibility.
+                  # Do not reset an assigned Status, including after reopening.
+                  if allowed and status(item['id']) is None:
+                      set_field(item['id'], status_field, todo)
+                  if eligible() != allowed:
+                      continue
+                  set_field(item['id'], permission_field, ready if allowed else not_ready)
+              if eligible() == allowed:
+                  break
+          else:
+              raise RuntimeError('Issue kept changing during reconciliation; rerun this workflow')
+          print('Project reconciliation complete')
+          PY
