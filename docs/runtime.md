@@ -113,11 +113,12 @@ Python callers can opt in with `Runtime(..., event_sink=callback)`. The callback
 
 Git operations inherit the parent process environment, including `GIT_*` variables, and use normal Git configuration and hooks. GitWeave does not force `core.hooksPath` or sandbox the Git environment. It sets author and committer name/email to `GitWeave <gitweave@localhost>` for its provenance commits. Checkpoint tree construction uses a private `GIT_INDEX_FILE` to capture final files without changing the worktree's index or an inherited index; these child-process overrides do not modify the parent environment. Checkpoints use `commit-tree`, which retains Git's normal plumbing behavior rather than running porcelain commit hooks.
 
-- `refs/gitweave/<run-id>/run` is written once at finalization for a completed or failed Run. It points to an independent record commit containing `run.json`, including the exact graph text, digest, request, base, timestamps, status, attempt index and terminal outputs. No aggregate Run record is written at startup or after individual attempts; attempt refs and notes retain provenance during execution.
-- `refs/gitweave/<run-id>/attempts/<instance-id>/<attempt>` retains every completed or failed attempt. The instance ID is distinct for each invocation, including loop iterations and fan-out items; the note retains declared node ID, item and nested fan-out origin.
+- `refs/gitweave/<run-id>/run` is written before scheduling the first node and updated at resume startup and finalization. Its version 2 `run.json` retains the exact graph text, digest, repository/GitHub identity, request, Run input, base, timestamps, status, provenance destination, attempt index and terminal outputs. Record commits form a parent chain so updates are ordinary fast-forwards and earlier records remain inspectable. The first record also retains the base commit as its parent. Attempt refs and notes retain progress between record updates.
+- `refs/gitweave/<run-id>/attempts/<instance-id>/<attempt>` retains every completed or failed attempt. The instance ID is distinct for each invocation, including loop iterations and fan-out items; the note retains declared node ID, stable `invocation_id`, item and nested fan-out origin. Attempt refs and their notes are immutable.
+- `refs/gitweave/<run-id>/started/<instance-id>/<attempt>` retains a separate same-tree start marker, written with a `running` note before executing an attempt. A start marker without a corresponding terminal attempt ref represents interrupted work. Resume preserves the marker and its original note and reports that attempt as `interrupted` in the aggregate Run index. Markers reserve invocation/attempt identities and step accounting without saving a running workspace.
 - `refs/notes/gitweave/<run-id>` stores execution records on attempt commits. Notes contain original inputs, workspace base, instruction/configuration, result, raw logs, timing, usage, sessions and failure diagnostics.
   Each Run has its own notes ref rather than one shared ref. A notes ref is updated like a branch, so a shared ref would make concurrent Runs read, modify and write (and push) the same ref and conflict; per-Run refs let each Run write and push only its own notes. As a consequence, plain `git log` and `git notes show` (which use the default `refs/notes/commits`) show no GitWeave records. Select a Run's ref using the Run ID in the attempt commit subject (`GitWeave RUN_ID INSTANCE attempt N`, or `GitWeave failed RUN_ID …` for failure commits), or read all Runs at once with `--notes='refs/notes/gitweave/*'`. See [Merging checkpoint commits and auditing branch history](#merging-checkpoint-commits-and-auditing-branch-history).
-- Each node invocation attempt, successful or failed, produces exactly one commit, which carries its attempt ref and Git note and is its stable execution identity. A successful attempt's commit is the node's checkpoint: its artifact state at the node boundary. Same-tree (empty) checkpoints are intentional: a node that changes no files, or only causes external side effects, still records that it ran and completed at that graph boundary, so they must not be optimized away. Successful checkpoints make Runs inspectable and analyzable later and are the intended completed-node boundaries for future resume/restart; resume itself is not implemented (see below). A failure commit (below) records the failed attempt but is not a completed-node boundary.
+- Each finished node invocation attempt, successful or failed, produces exactly one terminal commit, in addition to its start marker. The terminal commit carries its attempt ref and Git note and is its execution identity. A successful attempt's commit is the node's checkpoint: its artifact state at the node boundary. Same-tree (empty) checkpoints are intentional: a node that changes no files, or only causes external side effects, still records that it ran and completed at that graph boundary, so they must not be optimized away. Successful checkpoints make Runs inspectable and analyzable later and are the completed-node boundaries reused by resume. A failure commit (below) records the failed attempt but is not a completed-node boundary.
 - Success checkpoints the final assigned worktree, including an empty commit if unchanged. The checkpoint uses the Agent's final HEAD and any pending merge heads as parents; the original workspace base need not remain an ancestor. A private index captures final files even when the Agent's index has unresolved entries, without modifying that index. Conflict markers left in files are captured as file content. The original workspace base remains recorded in attempt provenance. A failure commit has the original workspace base as parent and the same tree as that base; a retry never uses the failure commit. Agent and Command attempts use the same commit, ref and note model.
 
 ```sh
@@ -126,9 +127,68 @@ git notes --ref=refs/notes/gitweave/RUN_ID show OUTPUT_COMMIT
 git diff BASE_COMMIT OUTPUT_COMMIT
 ```
 
-Raw logs can contain repository or prompt content; keep provenance under the same access controls as the repository. Runtime finalization publishes Run refs and notes when a provenance destination is resolved; see durable provenance below. There is no resume-after-process-crash command in v0; retained checkpoint refs/notes support diagnosis and are intended as the completed-node boundaries a future resume would continue from. A hard process/host crash before finalization may leave retained attempt refs/notes and a worktree on disk, but no final Run record. Git storage exhaustion can prevent record writes; those failures are surfaced rather than reported as completed execution.
+Raw logs can contain repository or prompt content; keep provenance under the same access controls as the repository. Runtime finalization publishes Run refs and notes when a provenance destination is resolved; see durable provenance below. A hard process/host crash before finalization leaves the startup Run definition and retained attempt refs/notes available for resume, and may leave a temporary worktree on disk. Git storage exhaustion can prevent record writes; those failures are surfaced rather than reported as completed execution.
 
 After attempting to record provenance, GitWeave attempts normal temporary worktree removal even if recording failed. Cleanup failures fail the Run when there is no earlier failure; otherwise the earlier failure stays primary and cleanup diagnostics are logged. Cleanup does not rewrite attempt provenance or add a `cleanup_warning`. Failed removal may leave filesystem/worktree remnants; there is no fallback deletion or intentional retention for diagnosis.
+
+## Resuming a Run
+
+```sh
+# From the original local checkout, or the directory containing GitHub stores:
+gitweave resume --run RUN_ID
+# Select a checkout, fetched repository, or bare GitWeave store explicitly:
+gitweave resume --run RUN_ID --repo /path/to/repository
+```
+
+Without `--repo`, resume searches the current Git repository and the shared
+`.gitweave/repos/*/*.git` stores under the current directory. Missing or ambiguous
+Runs fail with an input error; use `--repo` to select the local repository path.
+Resume needs the Run ref, attempt/start refs and notes in that repository; native
+Git fetch can restore them using the refspecs in [durable provenance](#durable-provenance).
+Python callers use `Runtime.resume(run_id, repo, adapters=..., event_sink=...).run()`.
+
+Resume continues the same `run_id`, refs and notes namespace. It uses the exact
+saved graph and verifies its SHA-256 digest; it never reads the original graph
+file or refetches the Issue/PR base. The original Run input, operator request,
+GitHub repository identity and provenance destination are retained. A fully
+completed Run is rejected (CLI exit 2) without execution or record changes. Older
+version 1 Run records lack stable invocation IDs and are also rejected.
+
+The scheduler replays the graph from the beginning. Each node has a structural
+`invocation_id`, independent of runtime scheduling order: sequence positions,
+parallel branch indexes, map item indexes, selected `if` branches, and zero-based
+loop iterations all form part of the path, including when nested. For example,
+`flow/1/parallel/0/0/map/2/0/worker` identifies one worker in map item 2 in parallel
+branch 0. Retries retain the same `invocation_id` and `instance_id`; each new
+attempt uses the next unused attempt number.
+
+A completed invocation supplies its existing checkpoint commit and saved Result
+message/data downstream without running the node. Schema-validated data remains
+usable for control flow. Failed attempts and start markers supply no node output.
+An unfinished invocation reruns from its original upstream inputs in a fresh
+worktree. Completed parallel siblings/map items and earlier loop iterations are
+reused; unfinished work and later nodes run normally. A failed Run can also be
+resumed explicitly. Each resumed unfinished invocation gets a fresh execution
+budget of one attempt plus its configured `retries`; historical failed and
+interrupted attempts retain their numbers and evidence.
+
+`max_steps` bounds distinct logical invocations across the entire Run. Reused
+invocations already count once; replay, retries and rerunning an unfinished
+invocation do not add another step. Start markers charge unfinished invocations
+before node execution. New paths consume the remaining budget, so repeated
+resumes cannot bypass the limit. Replayed node visits count as loop progress even
+when their results are reused. The final Run index includes attempts from before
+and after resume, including interrupted attempts, and `steps` is the logical Run
+invocation count.
+
+A per-Run process lock rejects overlapping execution/resume in the same Git
+repository; other Runs can execute concurrently. This lock stores no scheduler
+state. Resume operates at node boundaries and does not recover instructions or
+files inside an interrupted node. External effects performed before interruption
+may happen again on rerun. Stale temporary worktrees from a crash are not reused
+or automatically removed. Provenance is automatically pushed only at normal
+finalization to the original saved destination, with the usual Git authentication
+and transfer behavior.
 
 ## Command Nodes
 
@@ -241,7 +301,7 @@ CLI interfaces were checked against [Codex non-interactive documentation](https:
 
 After recording all attempts, runtime
 finalization pushes `refs/gitweave/RUN_ID/*` and `refs/notes/gitweave/RUN_ID`.
-This includes the final Run record, successful and failed attempts, Run input refs,
+This includes the final Run record, successful and failed attempts, start markers, Run input refs,
 and notes with retained logs. Only the selected Run's refs are pushed; artifact
 branches, tags and other Runs are unchanged. Merging or deleting an artifact branch
 does not delete these refs.
@@ -328,5 +388,5 @@ completed. The local final Run record, refs and notes remain available for
 inspection and retry. The record's `status` describes execution, not transfer
 success; it is saved before the push. Transfer errors preserve the underlying Git
 diagnostic alongside the persistence failure context. Final failed Runs are pushed
-too. A hard crash before finalization can leave local attempt provenance without a
-final Run record. Successful persistence does not imply task approval.
+too. A hard crash before finalization leaves the local startup Run definition and
+attempt provenance; startup and individual attempts are not automatically pushed. Successful persistence does not imply task approval.

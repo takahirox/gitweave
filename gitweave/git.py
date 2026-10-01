@@ -65,19 +65,64 @@ class Git:
         return self.command(*args, input=message)
 
     def retain(self, commit, suffix, record):
+        self._retain(commit, suffix, record)
+
+    def _retain(self, commit, suffix, record):
         with self.lock:
-            self.command("update-ref", f"refs/gitweave/{self.run_id}/{suffix}", commit)
-            self.command("notes", f"--ref={self.notes}", "add", "-f", "-F", "-", commit,
+            self.command("notes", f"--ref={self.notes}", "add", "-F", "-", commit,
                          input=json.dumps(record, ensure_ascii=False))
+            self.command("update-ref", f"refs/gitweave/{self.run_id}/{suffix}", commit, "")
+
+    def start_attempt(self, record):
+        suffix = f"started/{record['instance_id']}/{record['attempt']}"
+        base = record["workspace_base"]
+        commit = self.commit(self.command("rev-parse", f"{base}^{{tree}}"), [base],
+                             f"GitWeave started {self.run_id} {suffix}")
+        # A separate immutable marker survives termination before a checkpoint.
+        self._retain(commit, suffix, dict(record, status="running"))
+
+    def load_run(self):
+        return json.loads(self.command("show", f"refs/gitweave/{self.run_id}/run:run.json"))
+
+    def load_attempts(self):
+        prefix = f"refs/gitweave/{self.run_id}/"
+        refs = self.command("for-each-ref", "--format=%(refname) %(objectname)",
+                            prefix + "started/", prefix + "attempts/").splitlines()
+        attempts = {}
+        for line in refs:
+            ref, commit = line.split()
+            record = json.loads(self.command("notes", f"--ref={self.notes}", "show", commit))
+            key = (record["instance_id"], record["attempt"])
+            # Terminal records supersede start markers in the aggregate only.
+            if ref.startswith(prefix + "attempts/") or key not in attempts:
+                attempts[key] = dict(record, commit=commit)
+        return sorted(attempts.values(), key=lambda a: (a["started_at"], a["instance_id"], a["attempt"]))
 
     def run_record(self, record):
         # Store a real file tree as well as notes so a Run needs only its ref to inspect.
         with self.lock:
             blob = self.command("hash-object", "-w", "--stdin", input=json.dumps(record, ensure_ascii=False))
             tree = self.command("mktree", input=f"100644 blob {blob}\trun.json\n")
-            commit = self.commit(tree, [], f"GitWeave run {self.run_id}: {record['status']}")
+            ref = f"refs/gitweave/{self.run_id}/run"
+            previous = self.command("for-each-ref", "--format=%(objectname)", ref)
+            commit = self.commit(tree, [previous or record["base_commit"]],
+                                 f"GitWeave run {self.run_id}: {record['status']}")
             self.command("update-ref", f"refs/gitweave/{self.run_id}/run", commit)
             return commit
+
+    @contextlib.contextmanager
+    def run_lock(self):
+        # Locking is ephemeral coordination, not scheduler state. Different Runs
+        # remain concurrent; two processes must never execute the same Run.
+        with open(self.common_dir / f"gitweave-run-{self.run_id}.lock", "a") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise Failure("resume", "Run is already executing") from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
     @contextlib.contextmanager
     def worktree_lock(self):

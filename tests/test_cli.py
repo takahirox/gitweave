@@ -163,3 +163,21 @@ class CLITests(unittest.TestCase):
                     "run", "--graph", self.path, "--repo", "owner/repo", *source, "request"),
                     diagnostic)
                 runtime.assert_not_called()
+
+    def test_resume_forwards_identity_repository_and_events(self):
+        for repo in ([], ["--repo", str(self.directory)]):
+            with self.subTest(repo=repo), patch.object(cli.Runtime, "resume") as resume:
+                record = dict(run_id="id", status="completed", repository="local",
+                              run_ref="run", notes_ref="notes", outputs=[])
+                resume.return_value.run.return_value = record
+                code, stdout, stderr = self.invoke("resume", "--run", "id", *repo)
+                resume.assert_called_once_with("id", str(self.directory) if repo else None, event_sink=ANY)
+                self.assertEqual(code, 0)
+                self.assertEqual(json.loads(stdout), record)
+                self.assertEqual(stderr, "")
+
+    def test_resume_requires_run_and_reports_errors(self):
+        self.assert_input_error(self.invoke("resume"), "--run")
+        from gitweave.model import Failure
+        with patch.object(cli.Runtime, "resume", side_effect=Failure("resume", "Run is already completed")):
+            self.assert_input_error(self.invoke("resume", "--run", "id"), "already completed")

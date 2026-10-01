@@ -107,14 +107,17 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse((self.repo / "artifact.txt").exists())
         self.assertEqual(len(git(self.repo, "worktree", "list").splitlines()), 1)
 
-    def test_run_record_is_written_only_at_finalization(self):
+    def test_run_definition_is_written_before_attempts_and_finalized(self):
         for fail in (False, True):
             with self.subTest(fail=fail):
                 calls = []
 
                 def work(n, c, w):
-                    self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname)",
-                                         f"refs/gitweave/{run.id}/run"), "")
+                    initial = json.loads(git(self.repo, "show", f"refs/gitweave/{run.id}/run:run.json"))
+                    self.assertEqual(initial["status"], "running")
+                    self.assertEqual(initial["graph"], run.record["graph"])
+                    self.assertEqual(initial["base_commit"], self.base)
+                    self.assertEqual(initial["attempts"], [])
                     # Earlier attempts are already durable before the Run is finalized.
                     for attempt in run.record["attempts"]:
                         ref = (f"refs/gitweave/{run.id}/attempts/"
@@ -129,7 +132,8 @@ class RuntimeTests(unittest.TestCase):
                 run = self.runtime({"a": node(), "b": node()}, ["a", "b"], work, retries=1)
                 with patch.object(run.git, "run_record", wraps=run.git.run_record) as write:
                     record = run.run()
-                write.assert_called_once_with(record)
+                self.assertEqual(write.call_count, 2)
+                self.assertEqual(write.call_args.args, (record,))
                 self.assertEqual(record["status"], "failed" if fail else "completed")
                 self.assertEqual(len(record["attempts"]), 2 if fail else 3)
                 stored = json.loads(git(self.repo, "show", record["run_ref"] + ":run.json"))
@@ -454,7 +458,8 @@ class RuntimeTests(unittest.TestCase):
         run = self.runtime({"a": node("bad"), "b": node()}, [{"parallel": [["a"], ["b"]]}], work)
         with patch.object(run.git, "run_record", wraps=run.git.run_record) as write:
             record = run.run()
-        write.assert_called_once_with(record)
+        self.assertEqual(write.call_count, 2)
+        self.assertEqual(write.call_args.args, (record,))
         self.assertEqual(record["status"], "failed")
         self.assertEqual({a["status"] for a in record["attempts"]}, {"failed", "completed"})
         stored = json.loads(git(self.repo, "show", record["run_ref"] + ":run.json"))
