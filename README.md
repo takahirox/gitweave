@@ -158,6 +158,8 @@ gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123
 
 The trailing free-form request is optional. When the graph's instructions and `run_input` already define the work, omit it; when supplied, nodes receive it as additional operator guidance.
 
+`gitweave run` prints its final Run JSON on stdout and streams live node lifecycle and subprocess output events as JSON lines on stderr. See the [event contract](docs/runtime.md#live-execution-events) for node/attempt identity and output fields.
+
 See the [runtime guide](docs/runtime.md) for graph syntax, Command Nodes, parallel execution, fan-out, review/fix loops, Issue-driven development, Git records, and validation. [The parallel example](examples/parallel.json) combines both providers in one graph.
 
 Final Runs automatically push their GitWeave refs and notes to the artifact

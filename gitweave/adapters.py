@@ -1,4 +1,6 @@
 """CLI adapters keep provider-native events alongside normalized results."""
+import codecs
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +12,7 @@ import threading
 import time
 from .model import Failure, Result
 from .graph import validate_permission_mode, validate_sandbox
+from .events import output_callback
 
 
 # How long a Claude session may wait, with no turn running, on background tasks
@@ -35,6 +38,104 @@ def kill(child, group=True):
         pass
 
 
+def chunks(pipe):
+    """Read available bytes without waiting for a newline or a full text buffer.
+
+    Decode incrementally using the Popen text stream's encoding and newline rules,
+    so split multibyte characters and CRLF boundaries match communicate().
+    """
+    if not hasattr(pipe, "buffer"):  # Text-only streams (e.g. injected adapters).
+        while text := pipe.read(4096):
+            yield text
+        return
+    decoder = io.IncrementalNewlineDecoder(codecs.getincrementaldecoder(pipe.encoding)(pipe.errors), translate=True)
+    while raw := pipe.buffer.read1(4096):
+        text = decoder.decode(raw)
+        if text:
+            yield text
+    text = decoder.decode(b"", final=True)
+    if text:
+        yield text
+
+
+def drain(pipe, stream, output, errors, callback, lines=None):
+    """Tee a pipe and optionally deliver complete lines to the session driver."""
+    pending = ""
+    try:
+        for text in chunks(pipe):
+            output.append(text)
+            if callback is not None:
+                callback(stream, text)
+            if lines is not None:
+                pending += text
+                while "\n" in pending:
+                    line, pending = pending.split("\n", 1)
+                    lines.put(line + "\n")
+        if lines is not None and pending:
+            lines.put(pending)
+    except Exception as exc:
+        errors.append(exc)
+        # Still drain a malformed stream so a full pipe cannot block the child.
+        if hasattr(pipe, "buffer"):
+            while pipe.buffer.read1(4096):
+                pass
+    finally:
+        pipe.close()
+        if lines is not None:
+            lines.put(None)
+
+
+def capture(child, prompt, timeout, callback):
+    """Collect one-shot output while readers tee it to the attempt observer."""
+    stdout, stderr, errors = [], [], []
+    readers = [threading.Thread(target=drain, args=(pipe, stream, output, errors, callback), daemon=True)
+               for pipe, stream, output in ((child.stdout, "stdout", stdout), (child.stderr, "stderr", stderr))]
+
+    def send():
+        try:
+            child.stdin.write(prompt)
+            child.stdin.flush()
+        except BrokenPipeError:
+            pass  # Like communicate(), a child may exit without reading stdin.
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            try:
+                child.stdin.close()
+            except BrokenPipeError:
+                pass
+
+    writer = threading.Thread(target=send, daemon=True)
+    for reader in readers:
+        reader.start()
+    writer.start()
+    expired = False
+    deadline = None if timeout is None else time.monotonic() + timeout
+    try:
+        child.wait(timeout=timeout)
+        # communicate() bounds pipe draining too, including inherited pipes held
+        # by descendants after the immediate child exits.
+        for thread in [writer, *readers]:
+            thread.join(timeout=None if deadline is None else max(0, deadline - time.monotonic()))
+            if thread.is_alive():
+                raise subprocess.TimeoutExpired(child.args, timeout)
+    except subprocess.TimeoutExpired:
+        expired = True
+        kill(child)
+        child.wait()
+    finally:
+        writer.join()
+        for reader in readers:
+            reader.join()
+    stdout, stderr = "".join(stdout), "".join(stderr)
+    if expired:
+        raise Failure("timeout", "Node exceeded timeout", retryable=True,
+                      result=Result(raw_stdout=stdout, raw_stderr=stderr))
+    if errors:
+        raise errors[0]
+    return child.returncode, stdout, stderr
+
+
 def process(command, prompt, cwd, timeout, *, stream=False, idle=BACKGROUND_IDLE_SECONDS,
             grace=CLOSE_GRACE_SECONDS):
     try:
@@ -45,6 +146,9 @@ def process(command, prompt, cwd, timeout, *, stream=False, idle=BACKGROUND_IDLE
         raise Failure("launch", str(exc), retryable=True) from exc
     if stream:
         return session(child, prompt, timeout, idle, grace)
+    callback = output_callback.get()
+    if callback is not None:
+        return capture(child, prompt, timeout, callback)
     try:
         stdout, stderr = child.communicate(prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -66,17 +170,14 @@ def session(child, prompt, timeout, idle, grace):
     (Claude stops the remaining tasks). The budget restarts whenever the pending set
     empties, and a running turn never consumes it.
     """
-    lines, errors = queue.Queue(), []
-
-    def read_stdout():
-        for line in child.stdout:
-            lines.put(line)
-        lines.put(None)
-
-    threading.Thread(target=read_stdout, daemon=True).start()
-    reader = threading.Thread(target=lambda: errors.append(child.stderr.read()), daemon=True)
+    lines, output, errors, read_errors = queue.Queue(), [], [], []
+    callback = output_callback.get()
+    stdout_reader = threading.Thread(target=drain,
+                                     args=(child.stdout, "stdout", output, read_errors, callback, lines), daemon=True)
+    stdout_reader.start()
+    reader = threading.Thread(target=drain, args=(child.stderr, "stderr", errors, read_errors, callback), daemon=True)
     reader.start()
-    output, pending = [], []
+    pending = []
     turn_running, spent, idle_since, nudged, closed_at, killed = True, 0.0, None, False, None, False
     deadline = None if timeout is None else time.monotonic() + timeout
 
@@ -106,6 +207,8 @@ def session(child, prompt, timeout, idle, grace):
         if deadline is not None and now >= deadline:
             kill(child)
             child.wait()
+            close()
+            stdout_reader.join()
             reader.join()
             raise Failure("timeout", "Node exceeded timeout", retryable=True,
                           result=Result(raw_stdout="".join(output), raw_stderr="".join(errors)))
@@ -130,7 +233,6 @@ def session(child, prompt, timeout, idle, grace):
         now = time.monotonic()
         if line is None:
             break
-        output.append(line)
         try:
             event = json.loads(line)
         except ValueError:
@@ -155,7 +257,10 @@ def session(child, prompt, timeout, idle, grace):
                 spent += now - idle_since
                 idle_since = None
     child.wait()
+    stdout_reader.join()
     reader.join()
+    if read_errors:
+        raise read_errors[0]
     # A kill after GitWeave closed the session is not a failure; the final turn decides.
     return 0 if killed else child.returncode, "".join(output), "".join(errors)
 
