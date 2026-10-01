@@ -7,6 +7,7 @@ import time
 import unittest
 
 from gitweave.adapters import normalize, process
+from gitweave.events import observe_output
 from gitweave.model import Failure
 
 FAKE_CLAUDE = r'''
@@ -108,8 +109,11 @@ class ClaudeSessionTests(unittest.TestCase):
         self.assertEqual(normalize("claude", stdout, structured=True).data, {"turn": "done"})
 
     def test_session_waits_for_background_task_and_agent_continues(self):
-        code, stdout, elapsed = self.run_session("background")
+        output = []
+        with observe_output(lambda stream, text: output.append((stream, text))):
+            code, stdout, elapsed = self.run_session("background")
         self.assertEqual(code, 0)
+        self.assertEqual("".join(text for stream, text in output if stream == "stdout"), stdout)
         self.assertEqual(self.messages(), ["the prompt"])  # no nudge was needed
         result = normalize("claude", stdout, structured=True)
         # The final turn is the Result; tokens sum across turns, cost is cumulative.

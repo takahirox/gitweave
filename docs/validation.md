@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Issue #106: live node lifecycle and subprocess output events
+
+On 2026-10-01, `python3 -m unittest discover -s tests -v` passed all 138 deterministic tests in 35.583 seconds. All five example graphs passed `gitweave validate`; module CLI help and `git diff --check` passed.
+
+Real local subprocess tests hold commands and fake Codex/Claude executables open until their stdout and stderr events are observed, demonstrating live delivery without requiring a newline. They verify started/output/terminal ordering, distinct retry attempt identities, and output attribution for four node instances across two concurrent Runs. Concatenated event text equals retained attempt stdout/stderr; provider fixtures still normalize their structured results, native events, session identity and usage. Command validation and failure diagnostics retain the existing Result/provenance behavior.
+
+Additional tests cover no-output success, launch/validation/storage failures, timeout output retention, split UTF-8 and CRLF decoding, large stdin plus both output pipes, inherited descendant pipes bounded by timeout, and a closed event destination. Real CLI success and failure tests verify that stdout remains exactly the final Run JSON contract and stderr retains existing failure diagnostics alongside events. The Claude background-task continuation test also verifies streamed output, while the existing idle-budget, nudge, close-grace, retry and cleanup regressions remain green. No live model calls or external publication were performed.
+
 ## Issue #98: Claude sessions wait for background tasks
 
 On 2026-09-29, `python3 -m unittest discover -s tests -v` passed all 125 deterministic tests; `git diff --check` passed. Experiments with Claude Code 2.1.281 (`claude-haiku-4-5`, scratch directory) showed the following:

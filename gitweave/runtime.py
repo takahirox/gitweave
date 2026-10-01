@@ -13,6 +13,7 @@ import time
 import uuid
 from .adapters import CLIAdapter
 from .command import run_command
+from .events import AttemptEvents, observe_output
 from .git import Git
 from .persistence import destination, persist
 from .graph import validate_graph
@@ -24,7 +25,8 @@ def now():
 
 
 class Runtime:
-    def __init__(self, graph_text, repo, commit, request=None, *, adapters=None, pr=None, issue=None, provenance_remote=None):
+    def __init__(self, graph_text, repo, commit, request=None, *, adapters=None, pr=None, issue=None, provenance_remote=None,
+                 event_sink=None):
         self.graph = validate_graph(json.loads(graph_text))
         self.id = uuid.uuid4().hex
         self.github_repository = None
@@ -70,6 +72,7 @@ class Runtime:
         self.instances = 0
         self.stopped = False
         self.errors = []
+        self.event_sink = event_sink
 
     def tick(self):
         if self.stopped:
@@ -184,6 +187,18 @@ class Runtime:
                     raise error
 
     def attempt(self, name, node, context, record):
+        events = AttemptEvents(self.event_sink, record)
+        events.emit("node_started")
+        with observe_output(events.output if self.event_sink is not None else None):
+            try:
+                result, commit, error = self._attempt(name, node, context, record)
+            except BaseException:
+                events.emit("node_failed")
+                raise
+            events.emit("node_completed" if error is None else "node_failed")
+            return result, commit, error
+
+    def _attempt(self, name, node, context, record):
         started = time.monotonic()
         result = Result()
         error = None

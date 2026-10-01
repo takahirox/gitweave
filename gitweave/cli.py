@@ -5,6 +5,7 @@ import sys
 from .graph import validate_graph
 from .model import Failure
 from .runtime import Runtime
+from .events import JSONEventSink
 
 
 def main():
@@ -27,7 +28,8 @@ def main():
             validate_graph(json.loads(args.graph.read_text()))
             print(f"Graph passes static validation: {args.graph}")
             return 0
-        record = Runtime(args.graph.read_text(), args.repo, args.commit, args.request, pr=args.pr, issue=args.issue, provenance_remote=args.provenance_remote).run()
+        record = Runtime(args.graph.read_text(), args.repo, args.commit, args.request, pr=args.pr, issue=args.issue,
+                         provenance_remote=args.provenance_remote, event_sink=JSONEventSink(sys.stderr)).run()
         print(json.dumps({key: record[key] for key in ("run_id", "status", "repository", "run_ref", "notes_ref", "outputs")}, indent=2))
         if record["status"] != "completed":
             print(json.dumps(record["failure"]), file=sys.stderr)

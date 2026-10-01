@@ -84,6 +84,31 @@ Agent provider failures expose native diagnostics: Codex error/failed-turn messa
 
 On an exhausted/nonretryable failure, scheduling stops. Already-running siblings finish and retain their results before the Run is finalized as failed. No later dependent steps run. Runtime retries start from the original commit and input context with a new worktree. Task outcomes must be handled explicitly in the graph. Invalid Agent structured output is a nonretryable contract failure; invalid Command output (including schema failures) is a retryable Runtime Failure, see Command Nodes. Provider execution failures follow configured retries regardless of usage/quota wording in stdout or stderr. Adapters may mark failures nonretryable using explicit provider-native signals (currently Claude’s `rate_limit_event` with `rate_limit_info.status: rejected`). Retry decisions use the failure’s retryable flag, not its kind or free-form text; the runtime never purchases allowance, resets limits, or falls back to another model/provider.
 
+## Live execution events
+
+`gitweave run` emits newline-delimited JSON events on stderr while executing. Stdout remains the existing final Run JSON object, so callers can collect the result and observe progress separately:
+
+```sh
+gitweave run --graph examples/single.json --repo /path/to/repo --commit HEAD \
+  "Implement the request" > result.json 2> events.jsonl
+```
+
+Each attempt emits `node_started`, zero or more `node_output` events, and one terminal `node_completed` or `node_failed` event. Completion follows result validation, checkpoint/provenance recording and workspace cleanup; launch, execution, validation, storage and cleanup failures emit `node_failed`. A retry uses the same `instance_id` with an incremented, one-based `attempt`. Separate invocations of a declared node (including loops and fan-out) have distinct instance IDs. Parallel branches and Runs may interleave; attribute events by `(run_id, instance_id, attempt)` rather than by the most recently started node.
+
+Every event includes `type`, `run_id`, `node_id`, `instance_id`, `attempt` and an ISO 8601 UTC `timestamp`. Output events additionally include `stream` (`stdout` or `stderr`) and `text`:
+
+```json
+{"type":"node_started","run_id":"abc","node_id":"implement","instance_id":"implement-2","attempt":1,"timestamp":"2026-10-01T05:00:00+00:00"}
+{"type":"node_output","run_id":"abc","node_id":"implement","instance_id":"implement-2","attempt":1,"stream":"stderr","text":"running tests...\n","timestamp":"2026-10-01T05:00:01+00:00"}
+{"type":"node_completed","run_id":"abc","node_id":"implement","instance_id":"implement-2","attempt":1,"timestamp":"2026-10-01T05:00:02+00:00"}
+```
+
+`text` is a decoded output chunk, which may contain partial or multiple lines. Concatenate chunks separately per attempt and stream to reconstruct the original captured text. Provider stdout carries the native provider protocol; Command stdout carries its Result JSON. Output is flushed as it is read, subject to the subprocess's own buffering. The tee preserves full `Result.raw_stdout`/`Result.raw_stderr`, normalization and attempt notes, including available output on timeout. Timeout, retry and Claude background-task policies are unchanged. Events are observations, not a persistent status service.
+
+Existing CLI failure diagnostics also remain on stderr: an execution failure appends its existing JSON diagnostic without an event `type`, while input/persistence errors and cleanup warnings may be plain text. Event consumers should select JSON objects with a recognized event `type`; stderr is not exclusively events on error paths. Callers that ignore stderr continue to receive the same stdout result and exit status.
+
+Python callers can opt in with `Runtime(..., event_sink=callback)`. The callback receives an event dictionary and may be invoked concurrently from worker/reader threads. `gitweave.events.JSONEventSink(stream)` serializes and flushes JSON lines under a lock. The default Python Runtime has no observer. Output observation is scoped to the attempt worker, preserving the adapter's `run(node, context, workspace, timeout)` interface and the existing node input contract; custom adapters using GitWeave's process helper participate in the tee.
+
 ## Git records
 
 Git operations inherit the parent process environment, including `GIT_*` variables, and use normal Git configuration and hooks. GitWeave does not force `core.hooksPath` or sandbox the Git environment. It sets author and committer name/email to `GitWeave <gitweave@localhost>` for its provenance commits. Checkpoint tree construction uses a private `GIT_INDEX_FILE` to capture final files without changing the worktree's index or an inherited index; these child-process overrides do not modify the parent environment. Checkpoints use `commit-tree`, which retains Git's normal plumbing behavior rather than running porcelain commit hooks.
