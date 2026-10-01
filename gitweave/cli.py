@@ -22,14 +22,21 @@ def main():
     source.add_argument("--issue", type=int)
     run.add_argument("request", nargs="?", help="Optional additional operator guidance for nodes")
     run.add_argument("--provenance-remote")
+    resume = commands.add_parser("resume", help="Continue a Run from completed node checkpoints")
+    resume.add_argument("--run", required=True, dest="run_id")
+    resume.add_argument("--repo", help="Repository path or GitHub owner/repo; defaults to local Run discovery")
     args = parser.parse_args()
     try:
         if args.command == "validate":
             validate_graph(json.loads(args.graph.read_text()))
             print(f"Graph passes static validation: {args.graph}")
             return 0
-        record = Runtime(args.graph.read_text(), args.repo, args.commit, args.request, pr=args.pr, issue=args.issue,
-                         provenance_remote=args.provenance_remote, event_sink=JSONEventSink(sys.stderr)).run()
+        if args.command == "resume":
+            runtime = Runtime.resume(args.run_id, args.repo, event_sink=JSONEventSink(sys.stderr))
+        else:
+            runtime = Runtime(args.graph.read_text(), args.repo, args.commit, args.request, pr=args.pr, issue=args.issue,
+                              provenance_remote=args.provenance_remote, event_sink=JSONEventSink(sys.stderr))
+        record = runtime.run()
         print(json.dumps({key: record[key] for key in ("run_id", "status", "repository", "run_ref", "notes_ref", "outputs")}, indent=2))
         if record["status"] != "completed":
             print(json.dumps(record["failure"]), file=sys.stderr)

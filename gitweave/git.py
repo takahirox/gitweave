@@ -66,18 +66,58 @@ class Git:
 
     def retain(self, commit, suffix, record):
         with self.lock:
-            self.command("update-ref", f"refs/gitweave/{self.run_id}/{suffix}", commit)
             self.command("notes", f"--ref={self.notes}", "add", "-f", "-F", "-", commit,
                          input=json.dumps(record, ensure_ascii=False))
+            # Publish the boundary only once its Result is durable.
+            self.command("update-ref", f"refs/gitweave/{self.run_id}/{suffix}", commit)
 
     def run_record(self, record):
         # Store a real file tree as well as notes so a Run needs only its ref to inspect.
         with self.lock:
             blob = self.command("hash-object", "-w", "--stdin", input=json.dumps(record, ensure_ascii=False))
             tree = self.command("mktree", input=f"100644 blob {blob}\trun.json\n")
-            commit = self.commit(tree, [], f"GitWeave run {self.run_id}: {record['status']}")
-            self.command("update-ref", f"refs/gitweave/{self.run_id}/run", commit)
+            ref = f"refs/gitweave/{self.run_id}/run"
+            previous = self.command("for-each-ref", "--format=%(objectname)", ref)
+            commit = self.commit(tree, [previous] if previous else [],
+                                 f"GitWeave run {self.run_id}: {record['status']}")
+            self.command("update-ref", ref, commit)
             return commit
+
+    def load_run(self):
+        return json.loads(self.command("show", f"refs/gitweave/{self.run_id}/run:run.json"))
+
+    def load_attempts(self):
+        """Terminal refs supersede start markers; markers themselves stay immutable."""
+        prefix = f"refs/gitweave/{self.run_id}/"
+        attempts = {}
+        for directory in ("starts", "attempts"):
+            refs = self.command("for-each-ref", "--format=%(refname) %(objectname)",
+                                prefix + directory + "/").splitlines()
+            for line in refs:
+                ref, commit = line.split()
+                record = json.loads(self.command("notes", f"--ref={self.notes}", "show", commit))
+                instance, number = ref[len(prefix + directory + "/"):].split("/")
+                if (record.get("run_id") != self.run_id or record.get("instance_id") != instance
+                        or record.get("attempt") != int(number) or not record.get("invocation_id")
+                        or record.get("status") not in ("running", "failed", "completed")):
+                    raise Failure("resume", f"Invalid attempt provenance: {ref}")
+                if record["status"] == "completed" and record.get("output_commit") != commit:
+                    raise Failure("resume", f"Checkpoint disagrees with provenance: {ref}")
+                attempts[(instance, int(number))] = (commit, record)
+        return sorted(attempts.values(), key=lambda value: (value[1]["started_at"], value[1]["instance_id"], value[1]["attempt"]))
+
+    @contextlib.contextmanager
+    def run_lock(self):
+        # Transient mutual exclusion, not scheduler state. Different Runs remain concurrent.
+        with open(self.common_dir / f"gitweave-run-{self.run_id}.lock", "a") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise Failure("resume", "Run is already executing") from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
     @contextlib.contextmanager
     def worktree_lock(self):

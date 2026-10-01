@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Issue #108: resume from completed node checkpoints
+
+On 2026-10-01, `python3 -m unittest discover -s tests` passed all 153 deterministic tests in 50.906 seconds. All five example graphs passed static validation; module CLI help, resume help and `git diff --check` passed. After strengthening the scheduling-order test to reverse branch scheduling explicitly, all 13 focused resume tests passed in 9.301 seconds.
+
+Real CLI process tests kill the runtime and its command process group with SIGKILL during linear, parallel and map execution. They verify that the startup record survives without finalization, modified graph files are ignored, completed checkpoints and Results are reused, interrupted artifacts are discarded, replacement attempts retain invocation/instance identity, and existing refs and note contents remain unchanged. Concurrent resume is rejected before executing work. Deterministic adapter tests cover nested map/loop/if/parallel replay, selected `else` branches, repeated sequence nodes, retries across interruption, recovery before the first invocation, and repeated resumes at the original `max_steps` limit.
+
+Local Git tests recover a Run solely from fetched refs and notes, preserve frozen GitHub Issue identity and base without refetching, and verify ordinary fast-forward provenance pushes after resuming a failed Run while retaining earlier Run records. Completed, unknown, legacy, stale and digest-mismatched Runs are rejected. No live model calls or external publication were performed.
+
 ## Issue #106: live node lifecycle and subprocess output events
 
 On 2026-10-01, `python3 -m unittest discover -s tests -v` passed all 138 deterministic tests in 35.583 seconds. All five example graphs passed `gitweave validate`; module CLI help and `git diff --check` passed.

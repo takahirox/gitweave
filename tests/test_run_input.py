@@ -116,6 +116,34 @@ class RepositoryInputTests(unittest.TestCase):
         stats = dict(line.split(": ") for line in git(store, "count-objects", "-v").splitlines())
         return int(stats["count"]) + int(stats["in-pack"])
 
+    def test_resume_discovers_github_store_and_keeps_original_identity_and_base(self):
+        def fail(*args):
+            raise Failure("provider", "interrupted work")
+        run, failed = self.run_github(fail, issue=123)
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(git(self.remote, "rev-parse", "main"), self.head)
+        contexts = []
+        def finish(n, c, w):
+            contexts.append(c)
+            self.assertEqual(git(w, "rev-parse", "HEAD"), self.base)
+            return Result(message="done")
+        # Loading neither fetches the new default branch nor requires an input number.
+        original = Git.command
+        def no_fetch(storage, *args, **kwargs):
+            self.assertNotEqual(args[0], "fetch")
+            return original(storage, *args, **kwargs)
+        with patch.object(Git, "command", no_fetch):
+            for repo in (None, "Owner/Repo"):
+                resumed = Runtime.resume(run.id, repo, adapters={"codex": Fake(finish)})
+                self.assertEqual(resumed.git.repo, run.git.repo)
+            record = resumed.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual(contexts[0]["run_input"], {"kind": "issue", "number": 123})
+        self.assertEqual(contexts[0]["github_repository"], "owner/repo")
+        self.assertEqual(contexts[0]["request"], "request")
+        self.assertEqual(record["provenance_destination"], "https://github.com/owner/repo.git")
+        self.assertEqual(json.loads(git(self.remote, "show", record["run_ref"] + ":run.json")), record)
+
     def test_runs_share_one_store_per_repository(self):
         first, first_record = self.run_github(lambda *a: Result(), issue=1)
         store = self.root / ".gitweave" / "repos" / "owner" / "repo.git"

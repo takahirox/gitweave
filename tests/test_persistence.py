@@ -123,7 +123,7 @@ class PersistenceTests(unittest.TestCase):
         hook.chmod(0o755)
         with self.assertRaisesRegex(Failure, "hook declined"):
             self.run_local()
-        run_ref = git(self.repo, "for-each-ref", "--format=%(refname)", "refs/gitweave").splitlines()[-1]
+        run_ref = next(ref for ref in git(self.repo, "for-each-ref", "--format=%(refname)", "refs/gitweave").splitlines() if ref.endswith("/run"))
         record = json.loads(git(self.repo, "show", run_ref + ":run.json"))
         self.assertEqual(record["status"], "completed")
         self.assertIn("ended_at", record)
@@ -169,6 +169,21 @@ class PersistenceTests(unittest.TestCase):
         run = self.run_local(connected=True, work=work)
         self.assertEqual(run.record["status"], "failed")
         self.assertEqual(self.refs(self.remote, run), self.refs(self.repo, run))
+
+    def test_resumed_run_pushes_fast_forward_and_preserves_failed_record(self):
+        def fail(*args):
+            raise Failure("provider", "interrupted work")
+        run = self.run_local(connected=True, work=fail)
+        previous = run.git.resolve(run.record["run_ref"])
+        failed_attempt = run.record["attempts"][0]
+        resumed = Runtime.resume(run.id, self.repo, adapters={"fake": Fake(lambda *a: Result(message="done"))})
+        record = resumed.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual(self.refs(self.remote, run), self.refs(self.repo, run))
+        self.assertEqual(record["attempts"][0], failed_attempt)
+        self.assertEqual(record["attempts"][1]["attempt"], 2)
+        self.assertIn(previous, git(self.remote, "rev-list", record["run_ref"]).splitlines())
+        self.assertEqual(json.loads(git(self.remote, "show", previous + ":run.json"))["status"], "failed")
 
     def test_push_uses_normal_git_authentication_for_all_destinations(self):
         refs = ["refs/gitweave/run/run", "refs/notes/gitweave/run"]

@@ -107,14 +107,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse((self.repo / "artifact.txt").exists())
         self.assertEqual(len(git(self.repo, "worktree", "list").splitlines()), 1)
 
-    def test_run_record_is_written_only_at_finalization(self):
+    def test_run_definition_is_written_at_start_and_finalization(self):
         for fail in (False, True):
             with self.subTest(fail=fail):
                 calls = []
 
                 def work(n, c, w):
-                    self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname)",
-                                         f"refs/gitweave/{run.id}/run"), "")
+                    saved = json.loads(git(self.repo, "show", f"refs/gitweave/{run.id}/run:run.json"))
+                    self.assertEqual(saved["status"], "running")
+                    self.assertEqual(saved["graph"], run.record["graph"])
+                    self.assertEqual(saved["attempts"], [])
                     # Earlier attempts are already durable before the Run is finalized.
                     for attempt in run.record["attempts"]:
                         ref = (f"refs/gitweave/{run.id}/attempts/"
@@ -129,7 +131,8 @@ class RuntimeTests(unittest.TestCase):
                 run = self.runtime({"a": node(), "b": node()}, ["a", "b"], work, retries=1)
                 with patch.object(run.git, "run_record", wraps=run.git.run_record) as write:
                     record = run.run()
-                write.assert_called_once_with(record)
+                self.assertEqual(write.call_count, 2)
+                write.assert_called_with(record)
                 self.assertEqual(record["status"], "failed" if fail else "completed")
                 self.assertEqual(len(record["attempts"]), 2 if fail else 3)
                 stored = json.loads(git(self.repo, "show", record["run_ref"] + ":run.json"))
@@ -454,7 +457,8 @@ class RuntimeTests(unittest.TestCase):
         run = self.runtime({"a": node("bad"), "b": node()}, [{"parallel": [["a"], ["b"]]}], work)
         with patch.object(run.git, "run_record", wraps=run.git.run_record) as write:
             record = run.run()
-        write.assert_called_once_with(record)
+        self.assertEqual(write.call_count, 2)
+        write.assert_called_with(record)
         self.assertEqual(record["status"], "failed")
         self.assertEqual({a["status"] for a in record["attempts"]}, {"failed", "completed"})
         stored = json.loads(git(self.repo, "show", record["run_ref"] + ":run.json"))
@@ -473,7 +477,12 @@ class RuntimeTests(unittest.TestCase):
                         raise Failure("provider", "execution failed")
                     return Result()
                 run = self.runtime({"a": node()}, ["a"], work)
-                with patch.object(run.git, operation, side_effect=Failure("storage", "disk unavailable")), \
+                original = getattr(run.git, operation)
+                def storage(*args, **kwargs):
+                    if paths:
+                        raise Failure("storage", "disk unavailable")
+                    return original(*args, **kwargs)
+                with patch.object(run.git, operation, side_effect=storage), \
                      patch.object(run.git, "remove_worktree", wraps=run.git.remove_worktree) as remove:
                     record = run.run()
                 self.assertEqual(record["status"], "failed")
@@ -497,7 +506,12 @@ class RuntimeTests(unittest.TestCase):
                     with patch.object(run.git, "remove_worktree", side_effect=Failure("cleanup", "busy")) as remove, \
                          patch.object(run.git, "retain", wraps=run.git.retain) as retain:
                         if earlier == "storage":
-                            retain.side_effect = Failure("storage", "disk unavailable")
+                            original = type(run.git).retain.__get__(run.git)
+                            def storage(*args, **kwargs):
+                                if paths:
+                                    raise Failure("storage", "disk unavailable")
+                                return original(*args, **kwargs)
+                            retain.side_effect = storage
                         if earlier is None:
                             record = run.run()
                         else:
@@ -511,7 +525,7 @@ class RuntimeTests(unittest.TestCase):
                                     "storage": "disk unavailable"}[earlier],
                     })
                     remove.assert_called_once_with(paths[0])
-                    retain.assert_called_once()
+                    self.assertEqual(retain.call_count, 2)
                     commit, _, attempt = retain.call_args.args
                     self.assertNotIn("cleanup_warning", attempt)
                     if earlier != "storage":
