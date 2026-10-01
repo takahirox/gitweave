@@ -356,6 +356,27 @@ class RuntimeTests(unittest.TestCase):
         record = self.runtime({"plan": plan, "a": node()}, flow, lambda n, c, w: Result(data=[1, 2, 3]), max_steps=3).run()
         self.assertEqual(record["failure"], {"kind": "step_limit", "message": "fan-out exceeds remaining step budget"})
 
+    def test_map_conditional_items_use_node_invocation_budget(self):
+        plan = node("plan", schema={"type": "array"})
+        for selected in (False, True):
+            with self.subTest(selected=selected):
+                calls = []
+                def work(n, c, w):
+                    calls.append(n["instruction"])
+                    return Result(data=[1, 2, 3])
+                flow = ["plan", {"map": {"path": "/0/data", "flow": [
+                    {"if": {"condition": {"path": "/0/data", "equals": [1, 2, 3] if selected else []},
+                            "then": ["a"], "else": []}}]}}, "after"]
+                record = self.runtime({"plan": plan, "a": node("worker"), "after": node("after")},
+                                      flow, work, max_steps=2).run()
+                self.assertEqual(record["steps"], 2)
+                if selected:
+                    self.assertEqual(record["failure"]["kind"], "step_limit")
+                    self.assertEqual(calls, ["plan", "worker"])
+                else:
+                    self.assertEqual(record["status"], "completed", record.get("failure"))
+                    self.assertEqual(calls, ["plan", "after"])
+
     def test_loop_iteration_without_a_node_fails_immediately(self):
         empty_if = {"if": {"condition": {"path": "/0/data", "equals": True}, "then": [], "else": []}}
         for label, body in (("empty if", [empty_if]),

@@ -198,6 +198,28 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(record['steps'], 4)
         self.assertEqual([o['message'] for o in record['outputs']], ['worker', 'item 1', 'worker'])
 
+    def test_map_pass_through_items_resume_without_consuming_steps(self):
+        self.interrupt({'plan': node('plan', schema={'type': 'array'}),
+                        'unused': node('unused'), 'halt': node('halt'), 'after': node('after')},
+                       ['plan', {'map': {'path': '/0/data', 'flow': [
+                           {'if': {'condition': {'path': '/0/data', 'equals': []},
+                                   'then': ['unused'], 'else': []}}]}}, 'halt', 'after'],
+                       {'node': 'halt'}, 1, max_steps=4)
+        seen = []
+        def work(n, c, w):
+            seen.append(n['instruction'])
+            if n['instruction'] == 'halt':
+                self.assertEqual(c, self.ready['context'])
+                self.assertEqual(len(c['inputs']), 3)
+                self.assertTrue(all(i == c['inputs'][0] for i in c['inputs']))
+                self.assertEqual(c['inputs'][0]['data'], [0, 1, 2])
+                self.assertEqual(git(w, 'rev-parse', 'HEAD'), self.ready['head'])
+            return Result(message=n['instruction'])
+        record = self.resume(work)
+        self.assertEqual(seen, ['halt', 'after'])
+        self.assertEqual(record['steps'], 3)
+        self.assertEqual([a['attempt'] for a in record['attempts']], [1, 1, 2, 1])
+
     def test_native_fetch_restores_interrupted_run_in_a_new_repository(self):
         self.interrupt({'a': node('done'), 'b': node('halt')}, ['a', 'b'], {'node': 'halt'}, 1)
         source = self.repo

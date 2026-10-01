@@ -192,10 +192,15 @@ class Runtime:
                     items = self.control_value(inputs, spec["path"])
                     if not isinstance(items, list):
                         raise Failure("result", "map source must be an array")
-                    new_items = sum(not any(key.startswith(f"{position}/map/{i}/") for key in self.invocations)
-                                    for i in range(len(items)))
-                    if new_items > self.graph.get("max_steps", 100) - self.steps:
-                        raise Failure("step_limit", "fan-out exceeds remaining step budget")
+                    # Only preflight invocations known to execute: control blocks
+                    # can pass an item through without ever invoking a node.
+                    # Those flows use tick's budget check as nodes are reached.
+                    first = spec["flow"][0]
+                    if isinstance(first, str):
+                        new_invocations = sum(f"{position}/map/{i}/0/{first}" not in self.invocations
+                                              for i in range(len(items)))
+                        if new_invocations > self.graph.get("max_steps", 100) - self.steps:
+                            raise Failure("step_limit", "fan-out exceeds remaining step budget")
                     # Empty maps preserve context, allowing a following join to run once.
                     if items:
                         inputs = await self.branches([(spec["flow"], value, {"index": i, "parent": origin},
