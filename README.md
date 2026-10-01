@@ -60,7 +60,7 @@ The output commit is not only an artifact snapshot. It is also the execution che
 - it is the natural point to attach the Git-note execution record
 - it makes the execution path inspectable after the fact
 - it supports later analysis of inputs, results, logs, model/provider usage, timing, and external effects
-- it provides a concrete, completed node boundary from which future resume/restart behavior can continue
+- it provides a concrete, completed node boundary from which resume can continue
 - it keeps execution history Git-native instead of requiring a separate database
 
 A node that changes no files, for example a reviewer or a node that only causes external side effects, therefore still gets its own same-tree (empty) checkpoint commit. That commit is intentional, not redundant: it records that the invocation occurred and completed at that point in the graph. Do not optimize it away.
@@ -70,7 +70,7 @@ checkpoint commit → execution identity + artifact state at the node boundary
 Git note          → detailed execution metadata and structured Result
 ```
 
-Resume is not implemented yet: v0 has no command to continue a Run after a process crash. Checkpoint commits and their attached provenance are designed so that such behavior can later start from a known completed node boundary.
+Use `gitweave resume --run RUN_ID` to continue an interrupted Run from its completed checkpoints. GitWeave replays the saved graph, restores completed Results from notes, and reruns unfinished nodes from their original inputs. See [resuming a Run](docs/runtime.md#resuming-a-run).
 
 ### Git notes for execution results
 

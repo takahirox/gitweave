@@ -60,7 +60,7 @@ class Runtime:
             self.base = self.git.resolve(commit)
             self.run_input = {"kind": "commit", "commit": self.base}
         self.adapters = adapters if adapters is not None else {name: CLIAdapter(name) for name in ("codex", "claude")}
-        self.record = {"version": 1, "run_id": self.id, "repository": str(self.git.repo),
+        self.record = {"version": 2, "run_id": self.id, "repository": str(self.git.repo),
                        "github_repository": self.github_repository,
                        "base_commit": self.base, "run_input": self.run_input,
                        "request": request, "graph": graph_text,
@@ -73,10 +73,71 @@ class Runtime:
         self.stopped = False
         self.errors = []
         self.event_sink = event_sink
+        self.invocations = {}
+        self.visits = 0
+        self.resuming = False
 
-    def tick(self):
+    @classmethod
+    def resume(cls, run_id, repo=None, *, adapters=None, event_sink=None):
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", run_id):
+            raise Failure("resume", "Invalid Run ID")
+        candidates = [Path(repo)] if repo is not None else [Path.cwd(), *sorted(
+            (Path.cwd() / ".gitweave" / "repos").glob("*/*.git"))]
+        found = []
+        for candidate in candidates:
+            try:
+                storage = Git(candidate, run_id)
+                record = storage.load_run()
+            except Failure:
+                continue
+            found.append((storage, record))
+        if len(found) != 1:
+            raise Failure("resume", "Run not found or ambiguous; specify its repository with --repo PATH")
+        runtime = cls.__new__(cls)
+        runtime.git, record = found[0]
+        runtime.id = run_id
+        runtime.adapters = adapters if adapters is not None else {name: CLIAdapter(name) for name in ("codex", "claude")}
+        runtime.event_sink = event_sink
+        runtime.resuming = True
+        runtime.restore(record)
+        return runtime
+
+    @staticmethod
+    def attempt_summary(record):
+        return {"instance_id": record["instance_id"], "invocation_id": record["invocation_id"],
+                "attempt": record["attempt"], "commit": record["commit"],
+                "status": "interrupted" if record["status"] == "running" else record["status"]}
+
+    def restore(self, record):
+        if record.get("version") != 2:
+            raise Failure("resume", "Run predates resume support and has no stable invocation identities")
+        if record["status"] == "completed":
+            raise Failure("resume", "Run is already completed")
+        if record["run_id"] != self.id or hashlib.sha256(record["graph"].encode()).hexdigest() != record["graph_digest"]:
+            raise Failure("resume", "Run definition identity or graph digest does not match")
+        self.record = record
+        self.graph = validate_graph(json.loads(record["graph"]))
+        self.base = self.git.resolve(record["base_commit"])
+        self.github_repository = record["github_repository"]
+        self.run_input = record["run_input"]
+        self.provenance_remote = record["provenance_destination"]
+        history = self.git.load_attempts()
+        self.invocations = {}
+        for attempt in history:
+            self.invocations.setdefault(attempt["invocation_id"], []).append(attempt)
+        self.steps = len(self.invocations)
+        self.instances = max((int(a["instance_id"].rsplit("-", 1)[1]) for a in history), default=0)
+        self.record["attempts"] = [self.attempt_summary(a) for a in history]
+        self.errors = record.get("errors", [])
+        self.visits = 0
+        self.stopped = False
+
+    def tick(self, invocation):
         if self.stopped:
             raise Failure("stopped", "Run has stopped scheduling work")
+        self.visits += 1
+        if invocation in self.invocations:
+            return
         if self.steps >= self.graph.get("max_steps", 100):
             self.stopped = True
             raise Failure("step_limit", "Run exceeded max_steps")
@@ -106,67 +167,90 @@ class Runtime:
         expected = condition["equals"]
         return equal(actual, expected)
 
-    async def branches(self, flows, inputs, item, origin):
-        results = await asyncio.gather(*(self.flow(flow, inputs, branch_item, branch_origin)
-                                        for flow, branch_item, branch_origin in flows), return_exceptions=True)
+    async def branches(self, flows, inputs):
+        results = await asyncio.gather(*(self.flow(flow, inputs, branch_item, branch_origin, path)
+                                        for flow, branch_item, branch_origin, path in flows), return_exceptions=True)
         errors = [r for r in results if isinstance(r, BaseException)]
         if errors:
             raise next((e for e in errors if not isinstance(e, Failure) or e.kind != "stopped"), errors[0])
         return [value for branch in results for value in branch]
 
-    async def flow(self, flow, inputs, item=None, origin=None):
+    async def flow(self, flow, inputs, item=None, origin=None, path="flow"):
         try:
-            for step in flow:
+            for index, step in enumerate(flow):
+                position = f"{path}/{index}"
                 if isinstance(step, str):
-                    inputs = [await self.node(step, inputs, item, origin)]
+                    inputs = [await self.node(step, inputs, item, origin, f"{position}/{step}")]
                     continue
                 if self.stopped:
                     raise Failure("stopped", "Run has stopped scheduling work")
                 op, spec = next(iter(step.items()))
                 if op == "parallel":
-                    inputs = await self.branches([(branch, item, origin) for branch in spec], inputs, item, origin)
+                    inputs = await self.branches([(branch, item, origin, f"{position}/parallel/{i}")
+                                                  for i, branch in enumerate(spec)], inputs)
                 elif op == "map":
                     items = self.control_value(inputs, spec["path"])
                     if not isinstance(items, list):
                         raise Failure("result", "map source must be an array")
-                    if len(items) > self.graph.get("max_steps", 100) - self.steps:
-                        raise Failure("step_limit", "fan-out exceeds remaining step budget")
+                    # Only preflight invocations known to execute: control blocks
+                    # can pass an item through without ever invoking a node.
+                    # Those flows use tick's budget check as nodes are reached.
+                    first = spec["flow"][0]
+                    if isinstance(first, str):
+                        new_invocations = sum(f"{position}/map/{i}/0/{first}" not in self.invocations
+                                              for i in range(len(items)))
+                        if new_invocations > self.graph.get("max_steps", 100) - self.steps:
+                            raise Failure("step_limit", "fan-out exceeds remaining step budget")
                     # Empty maps preserve context, allowing a following join to run once.
                     if items:
-                        inputs = await self.branches([(spec["flow"], value, {"index": i, "parent": origin})
-                                                      for i, value in enumerate(items)], inputs, item, origin)
+                        inputs = await self.branches([(spec["flow"], value, {"index": i, "parent": origin},
+                                                       f"{position}/map/{i}")
+                                                      for i, value in enumerate(items)], inputs)
                 elif op == "if":
-                    inputs = await self.flow(spec["then"] if self.matches(inputs, spec["condition"]) else spec["else"], inputs, item, origin)
+                    branch = "then" if self.matches(inputs, spec["condition"]) else "else"
+                    inputs = await self.flow(spec[branch], inputs, item, origin, f"{position}/if/{branch}")
                 elif op == "loop":
+                    iteration = 0
                     while True:
-                        invoked = self.steps
-                        inputs = await self.flow(spec["flow"], inputs, item, origin)
+                        invoked = self.visits
+                        inputs = await self.flow(spec["flow"], inputs, item, origin, f"{position}/loop/{iteration}")
                         if not self.matches(inputs, spec["while"]):
                             break
                         # Without a node invocation the condition's result cannot change.
                         # (Invocations elsewhere still consume max_steps, so this terminates.)
-                        if self.steps == invoked:
+                        if self.visits == invoked:
                             raise Failure("loop", "Loop iteration invoked no node while its condition still matches")
+                        iteration += 1
             return inputs
         except BaseException:
             self.stopped = True
             raise
 
-    async def node(self, name, inputs, item, origin):
+    async def node(self, name, inputs, item, origin, invocation):
         async with self.semaphore:
-            self.tick()
-            self.instances += 1
-            instance = f"{name}-{self.instances}"
+            self.tick(invocation)
+            history = self.invocations.get(invocation, [])
+            completed = next((a for a in history if a["status"] == "completed"), None)
             node = self.graph["nodes"][name]
+            if completed is not None:
+                result = completed["result"]
+                return {"node_id": name, "instance_id": completed["instance_id"], "commit": completed["output_commit"],
+                        "message": result["message"], "data": result["data"], "data_validated": "schema" in node}
+            if history:
+                instance = history[0]["instance_id"]
+            else:
+                self.instances += 1
+                instance = f"{name}-{self.instances}"
             choice = node.get("workspace_base", 0)
             if choice != "run" and choice >= len(inputs):
                 raise Failure("graph", f"{name}: workspace_base index outside inputs")
             base = self.base if choice == "run" else inputs[choice]["commit"]
             retries = node.get("retries", self.graph.get("retries", 0))
-            for attempt in range(1, retries + 2):
+            first_attempt = max((a["attempt"] for a in history), default=0) + 1
+            for attempt in range(first_attempt, first_attempt + retries + 1):
                 if self.stopped:
                     raise Failure("stopped", "Run stopped before retry")
-                record = {"run_id": self.id, "node_id": name, "instance_id": instance,
+                record = {"run_id": self.id, "node_id": name, "instance_id": instance, "invocation_id": invocation,
                           "attempt": attempt, "fan_out_origin": origin, "item": item,
                           "kind": node["kind"], "provider": node.get("provider"), "model": node.get("model"),
                           "effort": node.get("effort"), "instruction": node.get("instruction"),
@@ -175,13 +259,13 @@ class Runtime:
                           "workspace_base": base, "started_at": now()}
                 # A fresh copy per attempt: retries start from the original context.
                 context = self.context(inputs, item)
+                self.git.start_attempt(record)
                 result, commit, error = await asyncio.to_thread(self.attempt, name, node, context, record)
-                self.record["attempts"].append({"instance_id": instance, "attempt": attempt,
-                                                 "commit": commit, "status": record["status"]})
+                self.record["attempts"].append(self.attempt_summary(dict(record, commit=commit)))
                 if error is None:
                     return {"node_id": name, "instance_id": instance, "commit": commit,
                             "message": result.message, "data": result.data, "data_validated": "schema" in node}
-                if not error.retryable or attempt > retries:
+                if not error.retryable or attempt == first_attempt + retries:
                     self.errors.append({"kind": error.kind, "message": str(error), "instance_id": instance})
                     self.stopped = True
                     raise error
@@ -250,6 +334,21 @@ class Runtime:
         return result, commit, error
 
     async def execute(self):
+        with self.git.run_lock():
+            if self.resuming:
+                # Refresh under the process lock: a prior executor may have finished
+                # between resume lookup and execution.
+                self.restore(self.git.load_run())
+            self.record.update(status="running", repository=str(self.git.repo), outputs=[],
+                               notes_ref=self.git.notes, run_ref=f"refs/gitweave/{self.id}/run")
+            for key in ("ended_at", "failure"):
+                self.record.pop(key, None)
+            if not self.resuming:
+                self.record["provenance_destination"] = destination(self.git, self.record, self.provenance_remote)
+            self.git.run_record(self.record)
+            return await self._execute()
+
+    async def _execute(self):
         self.semaphore = asyncio.Semaphore(self.graph.get("concurrency", 4))
         try:
             self.record["outputs"] = await self.flow(self.graph["flow"], [{"commit": self.base, "message": self.record["request"], "data": None}])
@@ -258,12 +357,12 @@ class Runtime:
             self.record["status"] = "failed"
             self.record["failure"] = {"kind": exc.kind if isinstance(exc, Failure) else "internal", "message": str(exc)}
         finally:
+            # Refs/notes also cover storage or cleanup exceptions that escaped
+            # before node() could append its in-memory summary.
+            self.record["attempts"] = [self.attempt_summary(a) for a in self.git.load_attempts()]
             self.record.update(ended_at=now(), steps=self.steps, errors=self.errors,
                                notes_ref=self.git.notes, run_ref=f"refs/gitweave/{self.id}/run")
-            try:
-                self.record["provenance_destination"] = destination(self.git, self.record, self.provenance_remote)
-            finally:
-                self.git.run_record(self.record)
+            self.git.run_record(self.record)
         if self.record["provenance_destination"] is not None:
             persist(self.git, self.record["provenance_destination"])
         return self.record

@@ -123,7 +123,8 @@ class PersistenceTests(unittest.TestCase):
         hook.chmod(0o755)
         with self.assertRaisesRegex(Failure, "hook declined"):
             self.run_local()
-        run_ref = git(self.repo, "for-each-ref", "--format=%(refname)", "refs/gitweave").splitlines()[-1]
+        run_ref = next(ref for ref in git(self.repo, "for-each-ref", "--format=%(refname)",
+                                        "refs/gitweave").splitlines() if ref.endswith("/run"))
         record = json.loads(git(self.repo, "show", run_ref + ":run.json"))
         self.assertEqual(record["status"], "completed")
         self.assertIn("ended_at", record)
@@ -214,3 +215,22 @@ class PersistenceTests(unittest.TestCase):
                 self.assertTrue(str(caught.exception).endswith("\n" + diagnostic))
                 self.assertIs(caught.exception.__cause__, failure)
                 self.assertEqual(self.refs(self.repo, run), retained)
+
+    def test_resumed_run_pushes_fast_forward_records_and_preserves_failed_attempt(self):
+        def fail(*args):
+            raise Failure("provider", "stopped")
+        run = Runtime(graph({"work": node()}, ["work"]), self.repo, self.base,
+                      adapters={"fake": Fake(fail)}, provenance_remote=str(self.remote))
+        first = run.run()
+        previous = run.git.resolve(first["run_ref"])
+        failed = first["attempts"][0]
+        failed_note = run.git.command("notes", f"--ref={run.git.notes}", "show", failed["commit"])
+        resumed = Runtime.resume(run.id, self.repo, adapters={"fake": Fake(lambda *a: Result(message="done"))})
+        final = resumed.run()
+        self.assertEqual(final["status"], "completed", final.get("failure"))
+        self.assertEqual(final["provenance_destination"], str(self.remote))
+        self.assertEqual([a["status"] for a in final["attempts"]], ["failed", "completed"])
+        self.assertEqual([a["attempt"] for a in final["attempts"]], [1, 2])
+        self.assertEqual(self.refs(self.repo, run), self.refs(self.remote, run))
+        run.git.command("merge-base", "--is-ancestor", previous, final["run_ref"])
+        self.assertEqual(run.git.command("notes", f"--ref={run.git.notes}", "show", failed["commit"]), failed_note)
