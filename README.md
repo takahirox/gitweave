@@ -155,12 +155,17 @@ gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10
 # Start from a GitHub Issue; nodes receive run_input {"kind": "issue", "number": 123}
 gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123
 
+# Select an Issue Run base branch explicitly; omitted uses the remote default branch.
+gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123 --base-branch release/1.x
+
 # For a repository with no commits, opt in using its configured default branch.
 # Obtain the branch from GitHub settings or: gh api repos/owner/repo --jq .default_branch
 gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123 --initialize-empty trunk
 ```
 
 The trailing free-form request is optional. When the graph's instructions and `run_input` already define the work, omit it; when supplied, nodes receive it as additional operator guidance.
+
+Issue Runs expose the selected `base_branch` to nodes and save it with the frozen `base_commit` in Run provenance. Publish nodes can target this branch explicitly. `--base-branch` is rejected with `--pr` (which uses the PR head) and `--commit` (which selects a local commit). If combined with `--initialize-empty`, both options must name the same branch; initialization still requires the configured default branch.
 
 `gitweave run` prints its final Run JSON on stdout and streams live node lifecycle and subprocess output events as JSON lines on stderr. See the [event contract](docs/runtime.md#live-execution-events) for node/attempt identity and output fields.
 

@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Issue #114: explicit base branches for Issue Runs
+
+On 2026-10-02, `python3 -m unittest discover -s tests -v` passed all 187 deterministic tests in 60.591 seconds, including the installed CLI entry point. All five example graphs passed static validation; module CLI help, Run help, and `git diff --check` passed. The 37 Run-input and empty-repository tests also passed after the final branch-name validation adjustment.
+
+New tests use real local Git transports with GitHub URLs redirected locally. They cover explicit selection of a branch with a slash and mixed case, frozen commits and branch names despite later branch/default movement, a default change during startup, default selection on a non-`main` branch, Agent and Command context, retained Run records and attempt notes, resume without another remote query/fetch, and older records without the new field. Missing branches, tag-only names, commit SHAs, invalid names, and ambiguous PR/local combinations fail before node execution. CLI tests preserve existing input modes, optional requests, provenance options and output, and verify the new option's argument and forwarding. Empty-repository tests cover explicit missing branches, matching initialization options and rejection of conflicting names before remote access.
+
+The runtime guide and README document the option and compatibility rules; the Issue workflow's Publish instruction uses the saved `base_branch` as the PR target. No live model calls, GitHub publication, reviews, or merges were performed. The diff was reviewed against the Issue and repository development/review guidelines for completeness and scope; this is implementation evidence, not PR approval.
+
 ## Issue #112: Issue Runs in empty repositories
 
 On 2026-10-02, `python3 -m unittest discover -s tests -v` passed all 172 deterministic tests in 58.479 seconds. All five example graphs passed static validation; module CLI help, Run help, and `git diff --check` passed.

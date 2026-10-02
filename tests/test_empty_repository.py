@@ -67,6 +67,7 @@ class EmptyRepositoryTests(unittest.TestCase):
     def test_initialized_base_supports_publication_merge_and_later_runs(self):
         def work(n, c, w):
             self.assertEqual(c["run_input"], {"kind": "issue", "number": 1})
+            self.assertEqual(c["base_branch"], "trunk")
             self.assertEqual(list(w.iterdir()), [w / ".git"])
             (w / "artifact.txt").write_text("Issue implementation\n")
             git(w, "-c", "user.name=Test", "-c", "user.email=test@localhost", "add", ".")
@@ -81,6 +82,7 @@ class EmptyRepositoryTests(unittest.TestCase):
         self.assertEqual(git(run.git.repo, "rev-parse", f"refs/gitweave/{run.id}/input/base"), base)
         record = run.run()
         self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual(record["base_branch"], "trunk")
         head = record["outputs"][0]["commit"]
         run.git.command("push", "--no-force", str(self.remote), f"{head}:refs/heads/issue-1")
         self.assertEqual(git(self.remote, "merge-base", "trunk", "issue-1"), base)
@@ -100,6 +102,23 @@ class EmptyRepositoryTests(unittest.TestCase):
         pr = Runtime(graph({"work": node()}, ["work"]), "owner/repo", None, pr=2)
         self.assertEqual(pr.base, head)
         self.assert_no_initialization()
+
+    def test_explicit_branch_on_empty_remote_fails_without_initialization(self):
+        with self.assertRaisesRegex(Failure, "couldn't find remote ref refs/heads/trunk"):
+            self.runtime(base_branch="trunk")
+        self.assert_no_initialization()
+
+    def test_matching_branch_and_initialization_options(self):
+        run = self.runtime(base_branch="trunk", initialize_empty="trunk")
+        self.assertEqual((run.base_branch, run.base), ("trunk", git(self.remote, "rev-parse", "HEAD")))
+        record = run.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual(record["base_branch"], "trunk")
+
+    def test_conflicting_branch_and_initialization_options_fail_before_git_access(self):
+        with self.assertRaisesRegex(Failure, "must select the same branch"):
+            self.runtime(base_branch="topic", initialize_empty="trunk")
+        self.assertEqual(self.commands, [])
 
     def test_nonempty_remote_uses_head_without_initializing(self):
         base = self.seed()
@@ -254,4 +273,4 @@ class EmptyRepositoryCLITests(unittest.TestCase):
                                                         run_ref="ref", notes_ref="notes", outputs=[])
             self.assertEqual(main(), 0)
             runtime.assert_called_once_with("graph", "owner/repo", None, None, pr=None, issue=1,
-                                            provenance_remote=None, event_sink=ANY, initialize_empty="trunk")
+                                            provenance_remote=None, event_sink=ANY, initialize_empty="trunk", base_branch=None)

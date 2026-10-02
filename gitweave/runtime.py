@@ -26,12 +26,17 @@ def now():
 
 class Runtime:
     def __init__(self, graph_text, repo, commit, request=None, *, adapters=None, pr=None, issue=None, provenance_remote=None,
-                 event_sink=None, initialize_empty=None):
+                 event_sink=None, initialize_empty=None, base_branch=None):
         self.graph = validate_graph(json.loads(graph_text))
+        if base_branch is not None and (issue is None or pr is not None or commit is not None):
+            raise Failure("input", "--base-branch is only supported with --issue; PR Runs use the PR head and local Runs use --commit")
         if initialize_empty is not None and (issue is None or pr is not None or commit is not None):
             raise Failure("input", "--initialize-empty is only supported with --issue")
+        if base_branch is not None and initialize_empty is not None and base_branch != initialize_empty:
+            raise Failure("input", "--base-branch and --initialize-empty must select the same branch")
         self.id = uuid.uuid4().hex
         self.github_repository = None
+        self.base_branch = None
         if pr is not None or issue is not None:
             source, number = ("pr_input", pr) if pr is not None else ("issue_input", issue)
             if commit is not None or (pr is not None and issue is not None) or type(number) is not int or number <= 0:
@@ -51,19 +56,32 @@ class Runtime:
             self.git = Git(repo, self.id)
         if self.github_repository:
             # Run inputs are identities; nodes read Issue/PR content themselves.
-            # The base is the PR head or the default branch HEAD, frozen at Run start.
+            # The base is the PR head or the selected branch head, frozen at Run start.
             # Fetch straight into this Run's ref, not FETCH_HEAD, which concurrent Runs share.
             source = f"refs/pull/{pr}/head" if pr is not None else "HEAD"
+            remote = f"https://github.com/{self.github_repository}.git"
+            if issue is not None:
+                if initialize_empty is not None:
+                    self.git.branch_ref(initialize_empty, "--initialize-empty")
+                if base_branch is not None:
+                    source = self.git.branch_ref(base_branch)
+                    self.base_branch = base_branch
+                else:
+                    self.base_branch = self.git.default_branch(remote)
+                    if self.base_branch is not None:
+                        source = self.git.branch_ref(self.base_branch)
             target = f"refs/gitweave/{self.id}/input/base"
-            self.base = self.git.fetch_input(f"https://github.com/{self.github_repository}.git", source, target,
+            self.base = self.git.fetch_input(remote, source, target,
                                              initialize_empty=initialize_empty)
+            if issue is not None and self.base_branch is None and initialize_empty is not None:
+                self.base_branch = initialize_empty
         else:
             self.base = self.git.resolve(commit)
             self.run_input = {"kind": "commit", "commit": self.base}
         self.adapters = adapters if adapters is not None else {name: CLIAdapter(name) for name in ("codex", "claude")}
         self.record = {"version": 2, "run_id": self.id, "repository": str(self.git.repo),
                        "github_repository": self.github_repository,
-                       "base_commit": self.base, "run_input": self.run_input,
+                       "base_commit": self.base, "base_branch": self.base_branch, "run_input": self.run_input,
                        "request": request, "graph": graph_text,
                        "graph_digest": hashlib.sha256(graph_text.encode()).hexdigest(),
                        "started_at": now(), "status": "running", "attempts": [], "outputs": []}
@@ -120,6 +138,7 @@ class Runtime:
         self.graph = validate_graph(json.loads(record["graph"]))
         self.base = self.git.resolve(record["base_commit"])
         self.github_repository = record["github_repository"]
+        self.base_branch = record.setdefault("base_branch", None)
         self.run_input = record["run_input"]
         self.provenance_remote = record["provenance_destination"]
         history = self.git.load_attempts()
@@ -148,6 +167,7 @@ class Runtime:
         # Only task-relevant data; Run/instance identity, fan-out origin and the
         # workspace base stay in provenance.
         return copy.deepcopy({"request": self.record["request"], "github_repository": self.github_repository,
+                              "base_branch": self.base_branch,
                               "run_input": self.run_input, "item": item,
                               "inputs": [{"node_id": i.get("node_id"), "commit": i["commit"],
                                           "message": i["message"], "data": i["data"]} for i in inputs]})
@@ -257,7 +277,7 @@ class Runtime:
                           "effort": node.get("effort"), "instruction": node.get("instruction"),
                           "argv": node.get("argv"), "config": node.get("config"),
                           "input_commits": [v["commit"] for v in inputs], "inputs": inputs,
-                          "workspace_base": base, "started_at": now()}
+                          "workspace_base": base, "base_branch": self.base_branch, "started_at": now()}
                 # A fresh copy per attempt: retries start from the original context.
                 context = self.context(inputs, item)
                 self.git.start_attempt(record)

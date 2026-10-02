@@ -170,6 +170,19 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(record['steps'], 1)
         self.assertEqual([a['status'] for a in record['attempts']], ['interrupted', 'completed'])
 
+    def test_older_run_without_base_branch_resumes_with_null_branch(self):
+        run = Runtime(graph({'a': node()}, ['a']), self.repo, self.base)
+        del run.record['base_branch']
+        run.git.run_record(run.record)
+        seen = []
+        def work(n, c, w):
+            seen.append(c['base_branch'])
+            return Result()
+        record = Runtime.resume(run.id, self.repo, adapters={'fake': Fake(work)}).run()
+        self.assertEqual(record['status'], 'completed', record.get('failure'))
+        self.assertEqual(seen, [None])
+        self.assertIsNone(record['base_branch'])
+
     def test_parallel_reuses_completed_sibling_even_when_it_finishes_later(self):
         self.interrupt({'a': node('done'), 'b': node('halt'), 'join': node('join')},
                        [{'parallel': [['b'], ['a']]}, 'join'], {'node': 'halt'}, 1, concurrency=2, max_steps=3)

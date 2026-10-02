@@ -124,7 +124,7 @@ class CLITests(unittest.TestCase):
                 code, stdout, stderr = self.invoke("run", "--graph", self.path, "--repo", self.directory,
                                                    "--commit", "HEAD", "request")
                 runtime.assert_called_once_with(self.path.read_text(), str(self.directory), "HEAD", "request",
-                                                pr=None, issue=None, provenance_remote=None, event_sink=ANY, initialize_empty=None)
+                                                pr=None, issue=None, provenance_remote=None, event_sink=ANY, initialize_empty=None, base_branch=None)
                 self.assertEqual(code, 0 if status == "completed" else 1)
                 self.assertEqual(json.loads(stdout), {key: record[key] for key in
                                                      ("run_id", "status", "repository", "run_ref", "notes_ref", "outputs")})
@@ -139,7 +139,7 @@ class CLITests(unittest.TestCase):
                 "run", "--graph", self.path, "--repo", "owner/repo", "--pr", "8",
                 "--provenance-remote", "origin", "request")
             runtime.assert_called_once_with(self.path.read_text(), "owner/repo", None, "request",
-                                            pr=8, issue=None, provenance_remote="origin", event_sink=ANY, initialize_empty=None)
+                                            pr=8, issue=None, provenance_remote="origin", event_sink=ANY, initialize_empty=None, base_branch=None)
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(stdout), record)
             self.assertEqual(stderr, "")
@@ -153,7 +153,37 @@ class CLITests(unittest.TestCase):
                 code, stdout, stderr = self.invoke("run", "--graph", self.path, "--repo", "owner/repo", *source)
                 self.assertEqual((code, stderr), (0, ""))
                 runtime.assert_called_once_with(self.path.read_text(), "owner/repo", "HEAD" if "--commit" in source else None,
-                                                None, provenance_remote=None, event_sink=ANY, initialize_empty=None, **expected)
+                                                None, provenance_remote=None, event_sink=ANY, initialize_empty=None, base_branch=None, **expected)
+
+    def test_run_base_branch_and_optional_request_are_forwarded(self):
+        for request in ([], ["extra guidance"]):
+            with self.subTest(request=request), patch.object(cli, "Runtime") as runtime:
+                record = dict(run_id="id", status="completed", repository="owner/repo",
+                              run_ref="run", notes_ref="notes", outputs=[])
+                runtime.return_value.run.return_value = record
+                code, stdout, stderr = self.invoke("run", "--graph", self.path, "--repo", "owner/repo",
+                                                   "--issue", "7", "--base-branch", "release/Next",
+                                                   "--provenance-remote", "origin", *request)
+                runtime.assert_called_once_with(self.path.read_text(), "owner/repo", None,
+                                                request[0] if request else None, pr=None, issue=7,
+                                                provenance_remote="origin", event_sink=ANY,
+                                                initialize_empty=None, base_branch="release/Next")
+                self.assertEqual((code, stderr), (0, ""))
+                self.assertEqual(json.loads(stdout), record)
+
+    def test_run_base_branch_requires_an_argument(self):
+        with patch.object(cli, "Runtime") as runtime:
+            self.assert_input_error(self.invoke("run", "--graph", self.path, "--repo", "owner/repo",
+                                                "--issue", "7", "--base-branch"), "expected one argument")
+            runtime.assert_not_called()
+
+    def test_run_rejects_base_branch_with_pr_or_commit(self):
+        for source in (["--pr", "8"], ["--commit", "HEAD"]):
+            with self.subTest(source=source), patch("gitweave.runtime.Git") as storage:
+                self.assert_input_error(self.invoke("run", "--graph", self.path, "--repo", "owner/repo",
+                                                    *source, "--base-branch", "topic"),
+                                        "--base-branch is only supported with --issue")
+                storage.assert_not_called()
 
     def test_run_requires_exactly_one_commit_or_pr(self):
         for source, diagnostic in [([], "required"),

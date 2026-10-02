@@ -60,7 +60,7 @@ class CommandNodeTests(unittest.TestCase):
         self.assertEqual(context["run_input"], {"kind": "commit", "commit": self.base})
         self.assertIsNone(context["github_repository"])
         self.assertEqual(context["request"], "request")
-        self.assertEqual(set(context), {"request", "github_repository", "run_input", "item", "inputs", "config"})
+        self.assertEqual(set(context), {"request", "github_repository", "base_branch", "run_input", "item", "inputs", "config"})
         self.assertEqual(context["inputs"], [{"node_id": None, "commit": self.base, "message": "request", "data": None}])
         cmd = self.note(run, record["attempts"][0]["commit"])
         agent = self.note(run, record["attempts"][1]["commit"])

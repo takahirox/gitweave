@@ -5,8 +5,9 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import sys
 import unittest
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, Mock, patch
 
 from gitweave.cli import main
 from gitweave.git import Git
@@ -22,7 +23,7 @@ class CLITests(unittest.TestCase):
             with self.subTest(flags=flags), patch("sys.argv", ["gitweave", "run", "--graph", "graph.json", "--repo", "owner/repo", *flags, "request"]), patch("gitweave.cli.Runtime") as runtime, patch.object(Path, "read_text", return_value="graph"), patch("sys.stdout", new_callable=io.StringIO):
                 runtime.return_value.run.return_value = dict(run_id="run", status="completed", repository="storage", run_ref="ref", notes_ref="notes", outputs=[])
                 self.assertEqual(main(), 0)
-                runtime.assert_called_once_with("graph", "owner/repo", commit, "request", pr=pr, issue=issue, provenance_remote=None, event_sink=ANY, initialize_empty=None)
+                runtime.assert_called_once_with("graph", "owner/repo", commit, "request", pr=pr, issue=issue, provenance_remote=None, event_sink=ANY, initialize_empty=None, base_branch=None)
 
     def test_cli_requires_one_input(self):
         for flags in ([], ["--commit", "HEAD", "--pr", "10"], ["--commit", "HEAD", "--issue", "1"],
@@ -92,6 +93,8 @@ class RepositoryInputTests(unittest.TestCase):
             self.assertNotIn(legacy, record)
         self.assertEqual(record["run_input"], {"kind": "pull_request", "number": 10})
         self.assertEqual(record["base_commit"], self.head)
+        self.assertIsNone(record["base_branch"])
+        self.assertIsNone(seen[0]["base_branch"])
         self.assertEqual(git(run.git.repo, "rev-parse", f"refs/gitweave/{run.id}/input/base"), self.head)
         self.assertEqual(record["provenance_destination"], "https://github.com/owner/repo.git")
         self.assertEqual(json.loads(git(self.remote, "show", record["run_ref"] + ":run.json")), record)
@@ -108,9 +111,121 @@ class RepositoryInputTests(unittest.TestCase):
         self.assertEqual(seen[0]["github_repository"], "owner/repo")
         self.assertEqual(record["run_input"], {"kind": "issue", "number": 123})
         self.assertEqual(record["base_commit"], self.base)
+        self.assertEqual(record["base_branch"], "main")
+        self.assertEqual(seen[0]["base_branch"], "main")
         self.assertEqual(git(run.git.repo, "rev-parse", f"refs/gitweave/{run.id}/input/base"), self.base)
         self.assertEqual(record["provenance_destination"], "https://github.com/owner/repo.git")
         self.assertEqual(json.loads(git(self.remote, "show", record["run_ref"] + ":run.json")), record)
+
+    def test_explicit_branch_is_frozen_and_exposed_to_agents_commands_and_provenance(self):
+        branch = "release/Next"
+        git(self.remote, "branch", branch, self.head)
+        seen = []
+        def work(n, c, w):
+            seen.append(c.copy())
+            self.assertEqual(git(w, "rev-parse", "HEAD"), self.head)
+            self.assertEqual(c["base_branch"], branch)
+            c["base_branch"] = "node mutation"
+            return Result()
+        command = {"kind": "command", "argv": [sys.executable, "-c",
+                   'import json, sys; c = json.load(sys.stdin); print(json.dumps({"message": c["base_branch"], "data": c}))']}
+        run = Runtime(graph({"work": node(), "publish": command}, ["work", "publish"]),
+                      "owner/repo", None, issue=123, base_branch=branch, adapters={"fake": Fake(work)})
+        git(self.remote, "update-ref", f"refs/heads/{branch}", self.base)
+        git(self.remote, "symbolic-ref", "HEAD", "refs/heads/topic")
+        record = run.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual(record["base_commit"], self.head)
+        self.assertEqual(record["base_branch"], branch)
+        self.assertEqual(record["run_input"], {"kind": "issue", "number": 123})
+        self.assertEqual(record["outputs"][0]["data"]["base_branch"], branch)
+        self.assertEqual(seen[0]["inputs"][0]["commit"], self.head)
+        self.assertEqual(git(run.git.repo, "rev-parse", f"refs/gitweave/{run.id}/input/base"), self.head)
+        for attempt in record["attempts"]:
+            note = json.loads(git(run.git.repo, "notes", f"--ref={run.git.notes}", "show", attempt["commit"]))
+            self.assertEqual(note["base_branch"], branch)
+        self.assertEqual(json.loads(git(self.remote, "show", record["run_ref"] + ":run.json")), record)
+
+    def test_default_branch_name_and_commit_are_frozen_even_if_default_changes(self):
+        git(self.remote, "branch", "trunk", self.base)
+        git(self.remote, "symbolic-ref", "HEAD", "refs/heads/trunk")
+        seen = []
+        run = Runtime(graph({"work": node()}, ["work"]), "owner/repo", None, issue=1,
+                      adapters={"fake": Fake(lambda n, c, w: seen.append(c) or Result())})
+        git(self.remote, "update-ref", "refs/heads/trunk", self.head)
+        git(self.remote, "symbolic-ref", "HEAD", "refs/heads/topic")
+        record = run.run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual(run.base, self.base)
+        self.assertEqual(record["base_branch"], "trunk")
+        self.assertEqual(seen[0]["base_branch"], "trunk")
+
+    def test_default_branch_switch_during_startup_keeps_selected_branch(self):
+        original = Git.default_branch
+        def switch(instance, remote):
+            branch = original(instance, remote)
+            git(self.remote, "symbolic-ref", "HEAD", "refs/heads/topic")
+            return branch
+        with patch.object(Git, "default_branch", switch):
+            run = Runtime(graph({"work": node()}, ["work"]), "owner/repo", None, issue=1)
+        self.assertEqual((run.base_branch, run.base), ("main", self.base))
+
+    def test_explicit_branch_does_not_require_a_valid_remote_head(self):
+        git(self.remote, "symbolic-ref", "HEAD", "refs/heads/missing")
+        run = Runtime(graph({"work": node()}, ["work"]), "owner/repo", None, issue=1, base_branch="topic")
+        self.assertEqual((run.base_branch, run.base), ("topic", self.head))
+
+    def test_missing_branch_and_tags_or_shas_do_not_fall_back_or_execute_nodes(self):
+        git(self.remote, "tag", "tag-only", self.head)
+        for branch in ("missing", "Topic", "tag-only", self.head):
+            work = Mock()
+            with self.subTest(branch=branch), self.assertRaisesRegex(Failure, "couldn't find remote ref refs/heads/"):
+                Runtime(graph({"work": node()}, ["work"]), "owner/repo", None, issue=1,
+                        base_branch=branch, adapters={"fake": Fake(work)})
+            work.assert_not_called()
+        store = self.root / ".gitweave" / "repos" / "owner" / "repo.git"
+        self.assertEqual(git(store, "for-each-ref", "refs/gitweave"), "")
+
+    def test_invalid_base_branch_fails_before_remote_access(self):
+        original = Git.command
+        def guarded(instance, *args, **kwargs):
+            self.assertNotIn(args[0], ("fetch", "ls-remote", "push", "worktree"))
+            return original(instance, *args, **kwargs)
+        for branch in ("", "HEAD", "-topic", "topic:other", "../topic", "topic.lock", "@{-1}", "a b", "a\0b", True):
+            with self.subTest(branch=branch), patch.object(Git, "command", guarded), self.assertRaisesRegex(Failure, "--base-branch requires a valid branch name"):
+                Runtime(graph({"work": node()}, ["work"]), "owner/repo", None, issue=1, base_branch=branch)
+
+    def test_base_branch_is_rejected_in_pr_and_local_modes_before_git_access(self):
+        for commit, source in ((None, {"pr": 10}), (self.head, {}), (None, {})):
+            with self.subTest(source=source), patch("gitweave.runtime.Git") as storage, self.assertRaisesRegex(Failure, "--base-branch is only supported with --issue"):
+                Runtime(graph({"work": node()}, ["work"]), "owner/repo", commit, base_branch="topic", **source)
+            storage.assert_not_called()
+
+    def test_resume_preserves_branch_and_base_without_refetching(self):
+        definition = graph({"work": node(), "publish": node()}, ["work", "publish"])
+        calls = []
+        def work(n, c, w):
+            calls.append(c["base_branch"])
+            if len(calls) == 2:
+                raise Failure("provider", "interrupted publish")
+            return Result()
+        run = Runtime(definition, "owner/repo", None, issue=1, base_branch="topic", adapters={"fake": Fake(work)})
+        self.assertEqual(run.run()["status"], "failed")
+        git(self.remote, "update-ref", "refs/heads/topic", self.base)
+        git(self.remote, "symbolic-ref", "HEAD", "refs/heads/topic")
+        def publish(n, c, w):
+            self.assertEqual(c["base_branch"], "topic")
+            self.assertEqual(c["inputs"][0]["node_id"], "work")
+            return Result()
+        original = Git.command
+        def guarded(instance, *args, **kwargs):
+            self.assertNotIn(args[0], ("fetch", "ls-remote"))
+            return original(instance, *args, **kwargs)
+        with patch.object(Git, "command", guarded):
+            record = Runtime.resume(run.id, run.git.repo, adapters={"fake": Fake(publish)}).run()
+        self.assertEqual(record["status"], "completed", record.get("failure"))
+        self.assertEqual((record["base_branch"], record["base_commit"]), ("topic", self.head))
+        self.assertEqual(len(record["attempts"]), 3)
 
     def objects(self, store):
         stats = dict(line.split(": ") for line in git(store, "count-objects", "-v").splitlines())
@@ -223,9 +338,11 @@ class RepositoryInputTests(unittest.TestCase):
     def test_local_commit_flow(self):
         def work(n, c, w):
             self.assertIsNone(c["github_repository"])
+            self.assertIsNone(c["base_branch"])
             self.assertEqual(c["run_input"], {"kind": "commit", "commit": self.head})
             return Result()
         run = Runtime(graph({"work": dict(node(), provider="codex")}, ["work"]), self.remote, self.head, "request", adapters={"codex": Fake(work)})
         self.assertEqual(run.run()["status"], "completed")
         self.assertEqual(run.record["run_input"], {"kind": "commit", "commit": self.head})
         self.assertIsNone(run.record["github_repository"])
+        self.assertIsNone(run.record["base_branch"])
