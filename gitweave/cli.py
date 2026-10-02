@@ -20,6 +20,8 @@ def main():
     source.add_argument("--commit")
     source.add_argument("--pr", type=int)
     source.add_argument("--issue", type=int)
+    run.add_argument("--initialize-empty", metavar="BRANCH",
+                     help="With --issue, initialize an empty remote on its configured default branch")
     run.add_argument("request", nargs="?", help="Optional additional operator guidance for nodes")
     run.add_argument("--provenance-remote")
     resume = commands.add_parser("resume", help="Continue a Run from completed node checkpoints")
@@ -35,7 +37,8 @@ def main():
             record = Runtime.resume(args.run_id, args.repo, event_sink=JSONEventSink(sys.stderr)).run()
         else:
             record = Runtime(args.graph.read_text(), args.repo, args.commit, args.request, pr=args.pr, issue=args.issue,
-                             provenance_remote=args.provenance_remote, event_sink=JSONEventSink(sys.stderr)).run()
+                             provenance_remote=args.provenance_remote, event_sink=JSONEventSink(sys.stderr),
+                             initialize_empty=args.initialize_empty).run()
         print(json.dumps({key: record[key] for key in ("run_id", "status", "repository", "run_ref", "notes_ref", "outputs")}, indent=2))
         if record["status"] != "completed":
             print(json.dumps(record["failure"]), file=sys.stderr)
