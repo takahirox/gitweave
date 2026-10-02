@@ -58,17 +58,30 @@ class Git:
     def resolve(self, commit):
         return self.command("rev-parse", "--verify", "--end-of-options", f"{commit}^{{commit}}")
 
+    def branch_ref(self, branch, option="--base-branch"):
+        diagnostic = f"{option} requires a valid {'default ' if option == '--initialize-empty' else ''}branch name"
+        if not isinstance(branch, str) or not branch or branch == "HEAD" or branch.startswith("-") or "\0" in branch:
+            raise Failure("input", diagnostic)
+        ref = f"refs/heads/{branch}"
+        try:
+            self.command("check-ref-format", ref)
+        except Failure as exc:
+            raise Failure("input", diagnostic) from exc
+        return ref
+
+    def default_branch(self, remote):
+        for line in self.command("ls-remote", "--symref", remote, "HEAD").splitlines():
+            if line.startswith("ref: refs/heads/") and line.endswith("\tHEAD"):
+                return line.removeprefix("ref: refs/heads/").removesuffix("\tHEAD")
+        # Empty remotes may not advertise their unborn HEAD. Keep the ordinary
+        # HEAD fetch failure unless the caller explicitly opts into initialization.
+        return None
+
     def fetch_input(self, remote, source, target, *, initialize_empty=None):
         """Freeze a remote input, optionally creating an empty remote's base branch."""
         if initialize_empty is not None:
             branch = initialize_empty
-            if not isinstance(branch, str) or not branch or branch.startswith("-"):
-                raise Failure("input", "--initialize-empty requires a valid default branch name")
-            ref = f"refs/heads/{branch}"
-            try:
-                self.command("check-ref-format", ref)
-            except Failure as exc:
-                raise Failure("input", "--initialize-empty requires a valid default branch name") from exc
+            ref = self.branch_ref(branch, "--initialize-empty")
             # Query *all* advertised refs. A missing/broken HEAD, tags-only remote,
             # or failed transport is not evidence of an empty repository.
             if not self.command("ls-remote", "--symref", remote):

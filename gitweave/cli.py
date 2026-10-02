@@ -20,6 +20,8 @@ def main():
     source.add_argument("--commit")
     source.add_argument("--pr", type=int)
     source.add_argument("--issue", type=int)
+    run.add_argument("--base-branch", metavar="BRANCH",
+                     help="With --issue, freeze this branch head as the Run base (default: remote default branch)")
     run.add_argument("--initialize-empty", metavar="BRANCH",
                      help="With --issue, initialize an empty remote on its configured default branch")
     run.add_argument("request", nargs="?", help="Optional additional operator guidance for nodes")
@@ -38,7 +40,7 @@ def main():
         else:
             record = Runtime(args.graph.read_text(), args.repo, args.commit, args.request, pr=args.pr, issue=args.issue,
                              provenance_remote=args.provenance_remote, event_sink=JSONEventSink(sys.stderr),
-                             initialize_empty=args.initialize_empty).run()
+                             initialize_empty=args.initialize_empty, base_branch=args.base_branch).run()
         print(json.dumps({key: record[key] for key in ("run_id", "status", "repository", "run_ref", "notes_ref", "outputs")}, indent=2))
         if record["status"] != "completed":
             print(json.dumps(record["failure"]), file=sys.stderr)

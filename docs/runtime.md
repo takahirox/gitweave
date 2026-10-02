@@ -50,9 +50,9 @@ GitWeave does not allowlist native option values. Explicit `sandbox` and `permis
 
 GitWeave continues to use Claude's non-interactive `-p` invocation without changing native settings, permission prompts, or other permission controls. Mode availability and execution remain subject to the installed CLI and native configuration; GitWeave does not substitute another mode or automatically fall back if Claude rejects a mode or denies an operation. There is no shared permission policy across providers.
 
-The dedicated worktree remains the official artifact boundary in every mode: agents must leave final files there. The common Codex/Claude prompt contains a short node-contract preamble, the node's declared instruction, and serialized execution inputs labeled as data. The preamble only explains the contract: the worktree (checked out at the selected upstream commit) is the artifact boundary checkpointed as the node's commit; `github_repository`, `run_input`, `request`, `inputs[]` (upstream node ID, checkpoint commit, message and data) and `item` mean what this guide describes; and the final message/data is the Result, the only non-file output passed downstream, so it should include any state later nodes need. Its exact wording is an implementation detail. GitWeave does not add behavioral directives about publication, usage limits, provider switching, or task approval. Graph authors are responsible for task-specific instructions. Agent subprocesses inherit the parent environment unchanged. A worktree is not an OS security boundary.
+The dedicated worktree remains the official artifact boundary in every mode: agents must leave final files there. The common Codex/Claude prompt contains a short node-contract preamble, the node's declared instruction, and serialized execution inputs labeled as data. The preamble only explains the contract: the worktree (checked out at the selected upstream commit) is the artifact boundary checkpointed as the node's commit; `github_repository`, `base_branch`, `run_input`, `request`, `inputs[]` (upstream node ID, checkpoint commit, message and data) and `item` mean what this guide describes; and the final message/data is the Result, the only non-file output passed downstream, so it should include any state later nodes need. Its exact wording is an implementation detail. GitWeave does not add behavioral directives about publication, usage limits, provider switching, or task approval. Graph authors are responsible for task-specific instructions. Agent subprocesses inherit the parent environment unchanged. A worktree is not an OS security boundary.
 
-The adapter receives a deliberately small, task-relevant context: `request` (optional operator guidance, `null` when omitted), `github_repository`, `run_input`, `inputs[]` (each upstream output's `node_id`, checkpoint `commit`, `message` and `data`; the Run base input has `node_id: null`), and the fan-out `item` (or `null`). Runtime-internal details (Run ID, invocation/instance IDs, fan-out origin, the selected workspace-base commit, and schema-validation flags) are not exposed to nodes; they remain in attempt provenance and the Run record. The worktree's `HEAD` is the selected workspace base. `run_input` is the Run's lightweight source identity with a `kind` discriminator: `{"kind": "commit", "commit": SHA}`, `{"kind": "pull_request", "number": N}`, or `{"kind": "issue", "number": N}`. The repository is part of the Run and is not repeated there; nodes receive it separately as `github_repository` (`owner/repo` for `--pr`/`--issue` Runs, `null` for local Runs). GitWeave does not embed Issue or PR content in node context; nodes read it themselves when the graph needs it. The adapter must return a `Result`; provider-native events, stderr, session IDs, usage and cost fields are preserved when available. No token/cost estimates are invented. The configured model/effort and raw events retain both requested and provider-reported information.
+The adapter receives a deliberately small, task-relevant context: `request` (optional operator guidance, `null` when omitted), `github_repository`, `base_branch` (the selected Issue branch, or `null` for PR/local Runs), `run_input`, `inputs[]` (each upstream output's `node_id`, checkpoint `commit`, `message` and `data`; the Run base input has `node_id: null`), and the fan-out `item` (or `null`). Runtime-internal details (Run ID, invocation/instance IDs, fan-out origin, the selected workspace-base commit, and schema-validation flags) are not exposed to nodes; they remain in attempt provenance and the Run record. The worktree's `HEAD` is the selected workspace base. `run_input` is the Run's lightweight source identity with a `kind` discriminator: `{"kind": "commit", "commit": SHA}`, `{"kind": "pull_request", "number": N}`, or `{"kind": "issue", "number": N}`. The repository is part of the Run and is not repeated there; nodes receive it separately as `github_repository` (`owner/repo` for `--pr`/`--issue` Runs, `null` for local Runs). GitWeave does not embed Issue or PR content in node context; nodes read it themselves when the graph needs it. The adapter must return a `Result`; provider-native events, stderr, session IDs, usage and cost fields are preserved when available. No token/cost estimates are invented. The configured model/effort and raw events retain both requested and provider-reported information.
 
 An optional `schema` validates `data`. The supported JSON Schema subset is `type` (object, array, string, integer, number, boolean, null), `properties`, `required`, boolean `additionalProperties`, `items`, `enum`, and `description`. Unknown keywords are rejected. Provider-specific schema restrictions also apply; for portable structured outputs use fully specified objects with `required` and `additionalProperties: false`, as in the examples. Both adapters request an envelope containing a human-readable `message` plus `data`.
 
@@ -209,7 +209,7 @@ A Command Node runs a deterministic process instead of an AI agent, for repeated
 | Channel | Contract |
 | --- | --- |
 | cwd | The node's dedicated worktree at `workspace_base` (its `HEAD`). A relative `argv[0]` such as `./scripts/op` resolves there. |
-| stdin | The node context as one JSON object (the same context an Agent sees: `request`, `github_repository`, `run_input`, `inputs[]`, `item`) plus `config`. |
+| stdin | The node context as one JSON object (the same context an Agent sees: `request`, `github_repository`, `base_branch`, `run_input`, `inputs[]`, `item`) plus `config`. |
 | stdout | Exactly one UTF-8 Result JSON object: `{"message": "...", "data": ...}`. `message` must be text; `data` may be null. `NaN`/`Infinity` are not JSON and are rejected. |
 | stderr | Logs. |
 | exit 0 | Normal completion. Task outcomes (for example "tests failed") are reported with exit 0 and a valid Result. |
@@ -241,6 +241,8 @@ PR and Issue modes use one persistent bare repository per GitHub repository, `.g
 
 Initialization fetches `refs/pull/<number>/head` once with Git directly into the Run's own `refs/gitweave/<run-id>/input/base` (not `FETCH_HEAD`, which concurrent Runs in the shared store would race on) and uses it as the Run base. It never starts from GitHub's synthetic merge commit and does not call the GitHub API: PR state, title, base branch and other metadata are not read or validated by GitWeave core. Later movement of the PR does not change the Run. `run.json.run_input` and every node's `context.run_input` are `{"kind": "pull_request", "number": N}`, and `github_repository` is `owner/repo`.
 
+`--base-branch` is rejected with `--pr`: the PR head already defines the Run base, and changing the PR's target branch is a node operation. It is also rejected with local `--commit` Runs, whose commit selection is unchanged. `base_branch` is `null` in node context and Run provenance for these modes.
+
 Nodes decide how to inspect, update, review, merge or comment on the PR. For example, the [review-fix-merge example](../examples/review-fix-merge.json) reviews structured `{approved, findings}` output, passes concrete findings to Fix, has a Push Agent update the PR head branch, reviews again until approved, and then has a Merge Agent merge it. Its `max_steps: 20` bounds the number of node invocations and therefore the loop; exhaustion or invalid output fails without merging. Push and Merge set `retries: 0` because they have external side effects. The example's approval is a graph decision, distinct from runtime completion and GitHub policy. The [review-comment example](../examples/review-comment.json) posts an Agent's review message with a Command Node that calls `gh pr comment` (it needs `python3` and an authenticated `gh` on `PATH`).
 
 A node's checkpoint commit and an external object's commit are different concepts. For example, a Publish Agent may push artifact commit `B` as a PR head, and GitWeave then records that node's checkpoint `P`. Carry external identities such as `{"pr": {"number": 42, "url": "...", "head_sha": "B"}}` explicitly in Result data; do not assume a checkpoint SHA is the SHA an external system uses.
@@ -257,7 +259,18 @@ gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123
 
 `--issue NUMBER` accepts a positive integer and uses the same `owner/repo` rules and shared per-repository store as PR mode. GitWeave records the number verbatim as `run_input: {"kind": "issue", "number": 123}` and exposes it in every node's context. It does not verify that the Issue exists, fetch its title/body/state, or interpret it; the Graph decides how nodes read and process the Issue (for example, an Agent instructed to read it with available tools). The same graph can be reused for different Issues.
 
-The Run base is the remote default branch HEAD, fetched once from `https://github.com/OWNER/REPO.git` at initialization and retained as `refs/gitweave/<run-id>/input/base`. Later branch movement does not change the Run. The Run's checkpoint commits, notes and refs are persisted to that same repository unless `--provenance-remote` overrides it.
+The Run base defaults to the remote default branch head. To select another branch:
+
+```sh
+gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123 \
+   --base-branch release/1.x
+```
+
+`--base-branch BRANCH` accepts a literal branch name, including names with slashes. GitWeave validates the name and fetches exactly `refs/heads/BRANCH` from `https://github.com/OWNER/REPO.git` once at initialization, retaining the commit as `refs/gitweave/<run-id>/input/base`. Missing or invalid explicit branches fail before any node executes; there is no fallback to the default branch, a tag, or a commit SHA. When omitted, GitWeave discovers the remote default branch name using Git's symbolic HEAD advertisement and fetches that branch. No GitHub API call is required. Later movement of the branch or a change to the repository's default branch does not change the Run.
+
+Every Agent and Command Node receives `base_branch`, the selected branch name. The Run record (`run.json.base_branch`) and attempt notes record it alongside the frozen base commit; `run_input` remains the Issue identity. Publish nodes should use this branch explicitly (for example, `gh pr create --base BRANCH`) so they target the same branch even if GitHub's default changes. Resume restores the saved branch and commit without querying or fetching the remote again. Older saved Runs without this field resume with `base_branch: null`.
+
+The Run's checkpoint commits, notes and refs are persisted to that same repository unless `--provenance-remote` overrides it; branch selection does not change this destination.
 
 ### Empty repositories
 
@@ -282,11 +295,16 @@ remote's Git advertisement may not expose its unborn HEAD. GitHub metadata
 lookup stays outside core Git operations; ProjectWeave or another caller can
 provide the same option after reading the repository's `default_branch`.
 
-With the option, startup first lists all advertised remote refs using Git. Only
+If `--base-branch` is also supplied, it must match `--initialize-empty`; conflicting
+names fail before remote access. This explicit initialization opt-in can create
+the otherwise missing branch in an empty repository. The created branch name is
+exposed as `base_branch` and retained in provenance.
+
+Before any initialization push, startup lists all advertised remote refs using Git. Only
 a successful, empty listing enables creation. Network/authentication errors,
 repository-not-found errors, and repositories with existing refs (including
 tags or branches with a broken default HEAD) never trigger initialization.
-Repositories with commits use the ordinary HEAD fetch. Without the option,
+Repositories with commits fetch the selected branch (the default when omitted). Without the option,
 empty repositories retain the existing fetch failure; local `--commit` and
 PR-based Runs retain their existing behavior.
 

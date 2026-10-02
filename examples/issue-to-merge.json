@@ -12,7 +12,7 @@
       "kind": "agent",
       "provider": "claude",
       "retries": 0,
-      "instruction": "Create the pull request for the Issue identified by run_input in github_repository, or update it if inputs[0].data.pr already identifies one, so that its head contains this worktree's changes. Follow the repository's conventions and pull request template for the branch, title and body, and link the Issue. Do not merge. Return the PR identity.",
+      "instruction": "Create the pull request for the Issue identified by run_input in github_repository, or update it if inputs[0].data.pr already identifies one, so that its head contains this worktree's changes. Use base_branch as the PR's target branch when provided. Follow the repository's conventions and pull request template for the branch, title and body, and link the Issue. Do not merge. Return the PR identity.",
       "schema": {
         "type": "object",
         "properties": {

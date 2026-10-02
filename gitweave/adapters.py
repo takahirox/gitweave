@@ -365,6 +365,7 @@ of the Run's repository, checked out at the selected upstream commit; it is the 
 GitWeave records them as this node's checkpoint commit.
 
 The execution inputs below use this contract: github_repository is the Run's GitHub repository (or null); \
+base_branch is the selected Issue Run branch (or null); \
 run_input identifies what the Run is about (for example an Issue or pull request number in that repository); \
 request is optional additional operator guidance (null when none was given; then rely on this \
 instruction and run_input); inputs[] are the upstream node outputs, each with its node_id, checkpoint \

@@ -67,6 +67,7 @@ class ExampleTests(unittest.TestCase):
             (w / "feature").write_text("draft")
             return Result(message="implemented")
         def publish(c, w):
+            self.assertEqual(c["base_branch"], "main")
             previous = c["inputs"][0]["data"]
             self.assertEqual(previous and previous["pr"]["number"], None if not reviews else 42)
             return Result(data={"pr": dict(pr, head_sha=git(w, "rev-parse", "HEAD"))})

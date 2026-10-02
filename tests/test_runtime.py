@@ -579,7 +579,7 @@ class RuntimeTests(unittest.TestCase):
         record = run.run()
         self.assertEqual(record["status"], "completed", record.get("failure"))
         for context in seen:
-            self.assertEqual(set(context), {"request", "github_repository", "run_input", "item", "inputs"})
+            self.assertEqual(set(context), {"request", "github_repository", "base_branch", "run_input", "item", "inputs"})
         self.assertEqual(seen[1]["item"], 1)
         self.assertEqual(seen[1]["inputs"], [{"node_id": "plan", "commit": record["attempts"][0]["commit"],
                                               "message": "plan", "data": [1]}])
