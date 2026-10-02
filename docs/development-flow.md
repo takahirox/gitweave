@@ -14,6 +14,10 @@ The Issue should clearly state:
 
 The Issue defines the scope of the work. If the scope is unclear, clarify the Issue before implementation instead of inventing requirements during the change.
 
+By default, completion criteria should be executable and verifiable by an AI agent. Require human checks, such as physical-device testing, subjective evaluation, or external approval, only when there is a necessary reason to do so.
+
+When human work is required, state why it is necessary and what result is expected. Distinguish optional additional validation from mandatory completion criteria.
+
 ## 2. Create a Pull Request for the Issue
 
 Implementation should be proposed through a Pull Request associated with the Issue.
