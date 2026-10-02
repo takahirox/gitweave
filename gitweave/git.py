@@ -58,6 +58,42 @@ class Git:
     def resolve(self, commit):
         return self.command("rev-parse", "--verify", "--end-of-options", f"{commit}^{{commit}}")
 
+    def fetch_input(self, remote, source, target, *, initialize_empty=None):
+        """Freeze a remote input, optionally creating an empty remote's base branch."""
+        if initialize_empty is not None:
+            branch = initialize_empty
+            if not isinstance(branch, str) or not branch or branch.startswith("-"):
+                raise Failure("input", "--initialize-empty requires a valid default branch name")
+            ref = f"refs/heads/{branch}"
+            try:
+                self.command("check-ref-format", ref)
+            except Failure as exc:
+                raise Failure("input", "--initialize-empty requires a valid default branch name") from exc
+            # Query *all* advertised refs. A missing/broken HEAD, tags-only remote,
+            # or failed transport is not evidence of an empty repository.
+            if not self.command("ls-remote", "--symref", remote):
+                root = self.commit(self.command("mktree", input=""), [],
+                                   "Initialize empty repository for GitWeave")
+                try:
+                    # A root has no ancestors: an ordinary push can only create
+                    # the branch or leave an identical root unchanged. It cannot
+                    # fast-forward/overwrite another initializer's history.
+                    self.command("push", "--no-force", "--no-follow-tags", remote, f"{root}:{ref}")
+                except Failure as push_error:
+                    # Another Run/user may have won, or the server may have
+                    # accepted our push before the connection was interrupted.
+                    # Adopt that branch only if a successful query finds it;
+                    # otherwise keep the original push failure. Never retry push.
+                    try:
+                        exists = self.command("ls-remote", "--refs", remote, ref)
+                    except Failure:
+                        raise push_error
+                    if not exists:
+                        raise push_error
+                source = ref
+        self.command("fetch", "--no-tags", "--no-write-fetch-head", remote, f"{source}:{target}")
+        return self.resolve(target)
+
     def commit(self, tree, parents, message):
         args = ["commit-tree", tree]
         for parent in dict.fromkeys(parents):

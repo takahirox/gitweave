@@ -154,6 +154,10 @@ gitweave run --graph examples/review-fix-merge.json --repo owner/repo --pr 10
 
 # Start from a GitHub Issue; nodes receive run_input {"kind": "issue", "number": 123}
 gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123
+
+# For a repository with no commits, opt in using its configured default branch.
+# Obtain the branch from GitHub settings or: gh api repos/owner/repo --jq .default_branch
+gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123 --initialize-empty trunk
 ```
 
 The trailing free-form request is optional. When the graph's instructions and `run_input` already define the work, omit it; when supplied, nodes receive it as additional operator guidance.

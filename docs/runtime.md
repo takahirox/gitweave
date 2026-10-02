@@ -259,6 +259,56 @@ gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123
 
 The Run base is the remote default branch HEAD, fetched once from `https://github.com/OWNER/REPO.git` at initialization and retained as `refs/gitweave/<run-id>/input/base`. Later branch movement does not change the Run. The Run's checkpoint commits, notes and refs are persisted to that same repository unless `--provenance-remote` overrides it.
 
+### Empty repositories
+
+For a newly created repository with no commits, opt in to creating its initial
+remote commit before graph execution:
+
+```sh
+# Read GitHub's configured default branch outside the runtime (requires gh login).
+gh api repos/owner/repo --jq .default_branch
+# Supply that branch name; this example assumes the API returned "trunk".
+gitweave run --graph examples/issue-to-merge.json --repo owner/repo --issue 123 \
+   --initialize-empty trunk
+```
+
+`--initialize-empty BRANCH` is supported only with `--issue`. It authorizes a
+startup push to that repository, using normal Git credentials; write access and
+any applicable branch rules are required. `BRANCH` must be the repository's
+configured GitHub default branch, not a PR/topic branch. GitWeave does not assume
+`main`, infer a branch from local Git configuration, or read/change GitHub
+settings. The caller supplies the default branch explicitly because an empty
+remote's Git advertisement may not expose its unborn HEAD. GitHub metadata
+lookup stays outside core Git operations; ProjectWeave or another caller can
+provide the same option after reading the repository's `default_branch`.
+
+With the option, startup first lists all advertised remote refs using Git. Only
+a successful, empty listing enables creation. Network/authentication errors,
+repository-not-found errors, and repositories with existing refs (including
+tags or branches with a broken default HEAD) never trigger initialization.
+Repositories with commits use the ordinary HEAD fetch. Without the option,
+empty repositories retain the existing fetch failure; local `--commit` and
+PR-based Runs retain their existing behavior.
+
+Initialization creates one root commit with an empty tree and the message
+`Initialize empty repository for GitWeave`, then pushes it to
+`refs/heads/BRANCH` with an explicit non-forced push and no following tags. It
+adds no README, license, or product files. Because the candidate has no parents,
+it cannot fast-forward a different existing commit: a concurrent branch creator
+wins without being overwritten. If the push fails but a successful subsequent
+query finds the branch, startup fetches and uses that remote commit. Otherwise
+the push failure is reported without another push attempt. The Run freezes the
+fetched remote branch as its input/base ref, rather than using a local candidate
+that lost the race.
+
+The remote root commit becomes the base for implementation/checkpoint commits
+and a separately published PR branch. The ordinary graph publication, review
+and merge flow therefore has a shared remote base. If startup is interrupted
+after creating the branch, a subsequent invocation fetches remote HEAD normally
+and keeps the existing root; initialization need not be repeated. If graph
+execution has already started and saved the Run definition, use `resume` as
+usual; it uses the frozen base without repeating startup initialization.
+
 ## Issue-driven development
 
 The Graph, not the runtime, defines the workflow. With `--issue`, the [issue-to-merge example](../examples/issue-to-merge.json) expresses:

@@ -1,5 +1,13 @@
 # v0 validation evidence
 
+## Issue #112: Issue Runs in empty repositories
+
+On 2026-10-02, `python3 -m unittest discover -s tests -v` passed all 172 deterministic tests in 58.479 seconds. All five example graphs passed static validation; module CLI help, Run help, and `git diff --check` passed.
+
+Fifteen new tests use real local bare remotes with GitHub URLs redirected locally. They cover opt-in startup on a non-`main` default branch, an empty-tree root with no parents, the frozen remote input ref, implementation commits and checkpoints, artifact-branch publication with a shared merge base, a retained merge history, and subsequent ordinary Issue/PR input fetches. Two concurrent initializers are forced to create distinct roots and both adopt the remote winner; a separate race verifies that a user's root is never overwritten. Interruption after branch creation and a push accepted before connection loss recover without replacing the base.
+
+Additional cases reject invalid branch names and initialization in PR/local modes, preserve the existing failure without opt-in, and prevent initialization for broken HEAD, tags-only remotes, authentication/network/repository-not-found probe errors, and ordinary fetch errors. Push rejection and a failed post-push query retain the push diagnostic without retrying publication. GitHub default-branch selection is explicit and remains outside core Git operations. No live GitHub PR, external publication, or model calls were performed; local publication and merge-history checks establish shared ancestry without claiming a live integration test.
+
 ## Issue #106: live node lifecycle and subprocess output events
 
 On 2026-10-01, `python3 -m unittest discover -s tests -v` passed all 138 deterministic tests in 35.583 seconds. All five example graphs passed `gitweave validate`; module CLI help and `git diff --check` passed.

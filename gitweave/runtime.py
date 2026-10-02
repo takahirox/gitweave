@@ -26,8 +26,10 @@ def now():
 
 class Runtime:
     def __init__(self, graph_text, repo, commit, request=None, *, adapters=None, pr=None, issue=None, provenance_remote=None,
-                 event_sink=None):
+                 event_sink=None, initialize_empty=None):
         self.graph = validate_graph(json.loads(graph_text))
+        if initialize_empty is not None and (issue is None or pr is not None or commit is not None):
+            raise Failure("input", "--initialize-empty is only supported with --issue")
         self.id = uuid.uuid4().hex
         self.github_repository = None
         if pr is not None or issue is not None:
@@ -53,9 +55,8 @@ class Runtime:
             # Fetch straight into this Run's ref, not FETCH_HEAD, which concurrent Runs share.
             source = f"refs/pull/{pr}/head" if pr is not None else "HEAD"
             target = f"refs/gitweave/{self.id}/input/base"
-            self.git.command("fetch", "--no-tags", "--no-write-fetch-head",
-                             f"https://github.com/{self.github_repository}.git", f"{source}:{target}")
-            self.base = self.git.resolve(target)
+            self.base = self.git.fetch_input(f"https://github.com/{self.github_repository}.git", source, target,
+                                             initialize_empty=initialize_empty)
         else:
             self.base = self.git.resolve(commit)
             self.run_input = {"kind": "commit", "commit": self.base}
