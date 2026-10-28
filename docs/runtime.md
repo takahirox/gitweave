@@ -16,7 +16,7 @@ Version 1 uses JSON, with `version: 1`, a `nodes` object and a nonempty `flow` a
 
 Graph structure and node configuration are validated at Run initialization. Node-specific runtime requirements are checked only when the node executes: an unselected branch may contain an unregistered agent provider or a Command whose executable does not exist. If selected, the failure is retained in Run/attempt provenance. Run inputs themselves are resolved at initialization.
 
-There are two node kinds, Agent Nodes (`"kind": "agent"`) and Command Nodes (`"kind": "command"`, see below). Both are executed in a dedicated worktree, produce one checkpoint commit per attempt, return the same Result (`message` + optional schema-validated `data`), and accept optional per-node `retries` and `timeout` overrides. There are no built-in GitHub System Actions: publishing, reviewing, merging, commenting or closing Issues are ordinary Agent or Command Nodes chosen by the Graph author, at whatever granularity suits the task and model.
+There are two node kinds, Agent Nodes (`"kind": "agent"`) and Command Nodes (`"kind": "command"`, see below). Both are executed in a dedicated worktree, produce one checkpoint commit per attempt, return the same Result (`message` + optional schema-validated `data`), and accept optional per-node `retries`, `retry_delay_seconds` and `timeout` overrides. There are no built-in GitHub System Actions: publishing, reviewing, merging, commenting or closing Issues are ordinary Agent or Command Nodes chosen by the Graph author, at whatever granularity suits the task and model.
 
 Agent nodes specify `provider`, `instruction`, optional `model` and `effort`, and optional `schema` for result data. Built-in providers are `codex` and `claude`; the Python runtime accepts additional adapters through dependency injection. Model and effort are passed to the chosen CLI; unsupported settings fail visibly rather than being silently substituted. Provider defaults apply if omitted.
 
@@ -71,6 +71,34 @@ Control paths are JSON pointers into `/<input-index>/data[/...]`. Routing requir
 The step after a parallel/map block is its explicit join: it receives all terminal commits and results. It starts only after all branches finish. An agent join has one designated workspace base and can inspect/merge the other input commits; the runtime performs no semantic merge. A map over an empty array passes its original inputs through, so a following join still runs once. Blocks may nest, including loops and maps, and a join never mixes results from different loop iterations. This structured graph grammar deliberately excludes arbitrary dynamic topology.
 
 `concurrency` (default 4) bounds running node attempts across nested blocks. `max_steps` (default 100) is the maximum number of Agent/Command Node invocations in a Run; evaluating `if`, `loop`, `map` and `parallel` blocks does not consume it, and retry attempts of one invocation count once. The Run record's `steps` is that invocation count. Retries are separately bounded by `retries` (default 0, additional attempts per invocation). A node's own `retries` overrides the graph value for that node; choose it according to the node's idempotency and external side effects (for example `"retries": 0` for a node that merges a PR). Maps whose item flow starts with a node reject fan-out before scheduling when its new first-node invocations exceed the remaining budget. Item flows starting with control blocks check the budget as nodes are reached; items that pass through without invoking a node consume no steps, including during resume. A loop iteration that invokes no node while its `while` condition still matches fails the Run immediately (`loop`): with no node run, the condition's result cannot change, so it could never make progress.
+
+`retry_delay_seconds` sets a fixed wait in seconds before each additional runtime retry, for both Agent and Command Nodes. It accepts finite nonnegative numbers, including fractions (for example `0.25`); booleans, strings, `null`, negative numbers and nonfinite values are invalid. Omission defaults to zero (immediate retries). A node's value overrides the graph default, including an explicit zero. The delay alone never enables retries: the failed attempt must be retryable and have an additional attempt remaining under the effective `retries`. There is no wait before the first attempt, after success, after a nonretryable failure, or after retry exhaustion.
+
+For example, this graph permits at most four attempts of each node per execution (the first plus three retries), waiting 60 seconds between failed retryable attempts of `work` and 120 seconds for `check`. Setting `check.retry_delay_seconds` to zero would make only that node's retries immediate:
+
+```json
+{
+  "version": 1,
+  "retries": 3,
+  "retry_delay_seconds": 60,
+  "timeout": 1800,
+  "nodes": {
+    "work": {
+      "kind": "agent",
+      "provider": "codex",
+      "instruction": "Implement the requested change"
+    },
+    "check": {
+      "kind": "command",
+      "argv": ["python", "scripts/check.py"],
+      "retry_delay_seconds": 120
+    }
+  },
+  "flow": ["work", "check"]
+}
+```
+
+The Runtime waits asynchronously, allowing independent async work and admitted sibling nodes to progress. The waiting invocation retains its existing concurrency slot; concurrency/admission policy is unchanged. If another branch stops scheduling during the wait, no new retry starts when the wait ends. The wait is outside each attempt's `timeout` and recorded attempt duration, and consumes no additional `max_steps`. Retries retain the same invocation identity, original inputs and workspace-base commit, with separate attempt provenance. Native Resume reloads the delay from the saved graph and reuses completed checkpoints under the existing Resume retry policy. It does not persist or restore a partially elapsed wait; there is no persistent timer service. Defaults and existing ProjectWeave graph configurations are not automatically changed.
 
 Node execution timeout is opt-in. Omit `timeout` to run each Agent or Command Node until it completes, fails, or is stopped externally, without a GitWeave-imposed wall-clock limit. To bound each attempt, set a finite positive number of seconds at the graph level, for example `"timeout": 1800`; a node-level `timeout` overrides the graph value for that node. Explicit `null`, booleans, strings, zero, negative numbers, and nonfinite values are invalid; only omission disables the timeout. This replaces the previous 600-second default.
 
@@ -204,7 +232,7 @@ A Command Node runs a deterministic process instead of an AI agent, for repeated
 }
 ```
 
-`argv` is a nonempty list of strings executed directly (no shell). `config` is optional static JSON. `schema`, `retries` and `timeout` work as for Agent Nodes; Agent-only fields (`provider`, `instruction`, `model`, `effort`, `sandbox`, `permission_mode`) are rejected. The process contract is:
+`argv` is a nonempty list of strings executed directly (no shell). `config` is optional static JSON. `schema`, `retries`, `retry_delay_seconds` and `timeout` work as for Agent Nodes; Agent-only fields (`provider`, `instruction`, `model`, `effort`, `sandbox`, `permission_mode`) are rejected. The process contract is:
 
 | Channel | Contract |
 | --- | --- |

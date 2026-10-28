@@ -141,6 +141,28 @@ class GraphTests(unittest.TestCase):
         with self.assertRaises(Failure):
             validate_graph(graph)
 
+    def test_retry_delay_validation_at_graph_and_node_levels(self):
+        for scope in ("graph", "agent", "command"):
+            graph = self.good()
+            if scope == "command":
+                graph["nodes"]["a"] = dict(kind="command", argv=["true"])
+            target = graph if scope == "graph" else graph["nodes"]["a"]
+            self.assertNotIn("retry_delay_seconds", validate_graph(graph))
+            self.assertNotIn("retry_delay_seconds", graph["nodes"]["a"])
+            for delay in (0, 0.0, 0.25, 60, 120.5):
+                with self.subTest(scope=scope, delay=delay):
+                    target["retry_delay_seconds"] = delay
+                    self.assertIs(validate_graph(graph), graph)
+                    self.assertEqual(target["retry_delay_seconds"], delay)
+            for delay in (None, True, False, "60", -1, -0.5,
+                          float("inf"), float("-inf"), float("nan"), [], {}):
+                target["retry_delay_seconds"] = delay
+                with self.subTest(scope=scope, delay=delay), self.assertRaises(Failure) as raised:
+                    validate_graph(graph)
+                self.assertEqual(raised.exception.kind, "graph")
+                prefix = "" if scope == "graph" else "a: "
+                self.assertEqual(str(raised.exception), prefix + "retry_delay_seconds must be finite and nonnegative")
+
     def test_schema_checks_nested_data_and_boolean_is_not_integer(self):
         schema = {"type": "object", "properties": {"items": {"type": "array", "items": {"type": "integer"}}}, "required": ["items"], "additionalProperties": False}
         validate({"items": [1, 2]}, schema)
