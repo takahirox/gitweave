@@ -267,6 +267,7 @@ class Runtime:
                 raise Failure("graph", f"{name}: workspace_base index outside inputs")
             base = self.base if choice == "run" else inputs[choice]["commit"]
             retries = node.get("retries", self.graph.get("retries", 0))
+            retry_delay = node.get("retry_delay_seconds", self.graph.get("retry_delay_seconds", 0))
             first_attempt = max((a["attempt"] for a in history), default=0) + 1
             for attempt in range(first_attempt, first_attempt + retries + 1):
                 if self.stopped:
@@ -290,6 +291,10 @@ class Runtime:
                     self.errors.append({"kind": error.kind, "message": str(error), "instance_id": instance})
                     self.stopped = True
                     raise error
+                if retry_delay > 0 and not self.stopped:
+                    # Keep the invocation's admission slot; the wait is outside
+                    # each attempt and its timeout, and yields to other work.
+                    await asyncio.sleep(retry_delay)
 
     def attempt(self, name, node, context, record):
         events = AttemptEvents(self.event_sink, record)

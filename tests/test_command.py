@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from gitweave.model import Result
 from gitweave.runtime import Runtime
@@ -122,8 +123,11 @@ class CommandNodeTests(unittest.TestCase):
         for graph_retries, node_retries, attempts in ((3, 0, 1), (0, 2, 3), (1, None, 2)):
             with self.subTest(graph_retries=graph_retries, node_retries=node_retries):
                 options = {} if node_retries is None else {"retries": node_retries}
-                record = self.runtime({"cmd": command(fail, **options)}, ["cmd"], retries=graph_retries).run()
+                with patch("gitweave.runtime.asyncio.sleep") as sleeper:
+                    record = self.runtime({"cmd": command(fail, **options)}, ["cmd"],
+                                          retries=graph_retries, retry_delay_seconds=0.25).run()
                 self.assertEqual(len(record["attempts"]), attempts)
+                self.assertEqual([call.args for call in sleeper.await_args_list], [(0.25,)] * (attempts - 1))
         calls = []
         def flaky(n, c, w):
             calls.append(1)

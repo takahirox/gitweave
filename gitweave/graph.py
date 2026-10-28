@@ -27,21 +27,27 @@ def validate_timeout(timeout, message):
     require(type(timeout) in (float, int) and math.isfinite(timeout) and timeout > 0, message)
 
 
+def validate_retry_delay(delay, message):
+    require(type(delay) in (float, int) and math.isfinite(delay) and delay >= 0, message)
+
+
 def validate_graph(graph):
     require(isinstance(graph, dict), "Graph must be an object")
-    require(set(graph) <= {"version", "nodes", "flow", "concurrency", "max_steps", "retries", "timeout"}, "Unknown graph field")
+    require(set(graph) <= {"version", "nodes", "flow", "concurrency", "max_steps", "retries", "retry_delay_seconds", "timeout"}, "Unknown graph field")
     require(type(graph.get("version")) is int and graph["version"] == 1, "Graph version must be 1")
     for key, default, minimum in [("concurrency", 4, 1), ("max_steps", 100, 1), ("retries", 0, 0)]:
         value = graph.get(key, default)
         require(type(value) is int and value >= minimum, f"{key} must be an integer >= {minimum}")
     if "timeout" in graph:
         validate_timeout(graph["timeout"], "timeout must be finite and positive")
+    if "retry_delay_seconds" in graph:
+        validate_retry_delay(graph["retry_delay_seconds"], "retry_delay_seconds must be finite and nonnegative")
     nodes = graph.get("nodes")
     require(isinstance(nodes, dict) and bool(nodes), "nodes must be a nonempty object")
     for name, node in nodes.items():
         require(isinstance(name, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", name)), "Invalid node ID")
         require(isinstance(node, dict), f"{name}: node must be an object")
-        require(set(node) <= {"kind", "provider", "model", "effort", "sandbox", "permission_mode", "instruction", "schema", "workspace_base", "argv", "config", "retries", "timeout"}, f"{name}: unknown node field")
+        require(set(node) <= {"kind", "provider", "model", "effort", "sandbox", "permission_mode", "instruction", "schema", "workspace_base", "argv", "config", "retries", "retry_delay_seconds", "timeout"}, f"{name}: unknown node field")
         require(node.get("kind") in ("agent", "command"), f"{name}: unknown kind")
         base = node.get("workspace_base", 0)
         require(base == "run" or (type(base) is int and base >= 0), f"{name}: workspace_base must be 'run' or an input index")
@@ -49,6 +55,8 @@ def validate_graph(graph):
             require(type(node["retries"]) is int and node["retries"] >= 0, f"{name}: retries must be an integer >= 0")
         if "timeout" in node:
             validate_timeout(node["timeout"], f"{name}: timeout must be finite and positive")
+        if "retry_delay_seconds" in node:
+            validate_retry_delay(node["retry_delay_seconds"], f"{name}: retry_delay_seconds must be finite and nonnegative")
         if node["kind"] == "agent":
             require(not {"argv", "config"} & set(node), f"{name}: argv and config are only supported on command nodes")
             require(isinstance(node.get("provider"), str) and bool(node["provider"]), f"{name}: provider required")
