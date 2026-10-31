@@ -201,3 +201,7 @@ The command checks JSON syntax, graph structure, node references, and supported 
 Validation needs no target repository, base commit, user request, installed agent CLIs, or agent/GitHub credentials. It creates no Run, invokes no agents or commands, accesses no network, and does not modify repository state.
 
 Success means the graph passes static validation. It does not check provider availability, authentication, runtime-dependent input values, or semantic task correctness, and does not guarantee that agent execution or the task outcome will succeed.
+
+## Development
+
+Follow the [development flow](docs/development-flow.md), [review guidelines](docs/review-guidelines.md), and [test and CI principles](docs/development-flow.md#test-and-ci-principles) when contributing.
