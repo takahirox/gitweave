@@ -49,6 +49,10 @@ Also verify the ordinary quality of the change:
 
 Review applicable interface changes against the [UI/UX principles](../README.md#uiux).
 
+Apply the [test and CI principles](development-flow.md#test-and-ci-principles): for new or expanded tests, identify the additional defect coverage, check for duplicated assurance or execution, and assess execution and maintenance cost while preserving required regressions.
+
+> Does this change provide sufficient confidence with the lightest appropriate validation, without redundant execution?
+
 ## Check Pre-Merge Acceptance and Post-Merge Verification
 
 Following the [development flow](development-flow.md#1-start-with-an-issue), require mandatory pre-merge acceptance criteria to be achievable and verifiable before merge. Checks possible only after merge must not be prerequisites for pre-merge PR approval.
