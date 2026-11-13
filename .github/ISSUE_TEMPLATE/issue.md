@@ -24,7 +24,7 @@ For a merge-triggered site deployment, validate code/configuration, local builds
 
 ## Post-merge verification
 
-Record required checks possible only after merge separately, or state that none are required. For a merge-triggered deployment, verify publication and the newly published site after merge. Report these checks as pending until performed; do not claim they passed based on pre-merge validation. See the [review guidance](https://github.com/takahirox/gitweave/blob/main/docs/review-guidelines.md#check-pre-merge-acceptance-and-post-merge-verification).
+Record checks possible only after merge when the actual change requires them, or state that none are required. Documentation-only edits need no routine manual, device, model-download, or deployment gates. Report pending or environment-blocked checks honestly; closure does not claim they passed. Follow the [merge and post-merge lifecycle](https://github.com/takahirox/gitweave/blob/main/docs/development-flow.md#5-merge): merge and close the fully implemented Issue after mandatory pre-merge acceptance, then record verification evidence and track actual defects in an existing equivalent or new linked Issue.
 
 ## Context
 

@@ -20,7 +20,7 @@ Verify that the Pull Request addresses all parts of the Issue that it claims to 
 
 Do not approve a Pull Request as closing an Issue when important requirements remain unimplemented.
 
-If the change is intentionally partial, the Pull Request should say so and the Issue should remain open.
+If the change is intentionally partial, the Pull Request should state the remaining scope and must not automatically close the parent Issue. Pending post-merge-only verification does not make an otherwise complete implementation partial.
 
 ## Check for Unnecessary Work
 
@@ -60,6 +60,10 @@ Following the [development flow](development-flow.md#1-start-with-an-issue), req
 For example, for a merge-triggered site deployment, review code/configuration, local builds, and applicable automated test results before merge. Verification of publication and the newly published site belongs after merge.
 
 Ensure required post-merge verification is recorded separately and reported as pending until performed. Check that validation claims describe the checks actually performed and their results; pre-merge evidence does not prove post-merge publication succeeded. This distinction does not waive implementation requirements or applicable pre-merge tests, and required post-merge checks remain required.
+
+Apply the [merge and post-merge lifecycle](development-flow.md#5-merge): preserve `Closes #N` for a fully implemented Issue with applicable mandatory pre-merge acceptance satisfied. Do not request removing it, keeping the source Issue open, or withholding approval solely because post-merge-only verification is pending; that creates a Review → Fix → Publish → Review loop. After successful merge, close the original Issue, record verification evidence accurately, and track any actual defect in an existing equivalent or new linked Issue rather than reopening the original solely for follow-up.
+
+Require post-merge checks only when the change needs them. Documentation edits do not acquire routine manual approval, physical-device, heavyweight-model-download, or deployment gates. Missing implementation, mandatory pre-merge tests, required protections, and genuinely necessary pre-merge human acceptance remain blockers.
 
 ## Review Outcome
 
